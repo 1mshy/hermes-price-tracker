@@ -20,10 +20,12 @@ or WhatsApp when something gets cheap.
 ## Quick start
 
 ```bash
-cp .env.example .env          # then edit: model endpoint + notification channels
-docker compose up -d pricewatch
-docker compose run --rm hermes          # interactive agent
+cp .env.example .env          # then edit: model endpoint, dashboard password, channels
+docker compose up -d pricewatch dashboard
+docker compose run --rm hermes          # interactive agent in the terminal
 ```
+
+Then open **http://localhost:9119** and sign in.
 
 Then just talk to it:
 
@@ -31,6 +33,39 @@ Then just talk to it:
 > *"Track https://store.creality.com/products/k1-se-3d-printer and tell me if it drops 12%."*
 > *"Watch for Polymaker PolyTerra PLA 1kg matte black under $18 anywhere."*
 > *"What am I tracking, and has anything moved?"*
+
+## Browser dashboard
+
+Hermes ships its own web UI — chat with the agent, browse past sessions, and edit
+model/provider/API-key config without touching a file. `docker compose up -d
+dashboard` runs it on **http://localhost:9119**, wired to the same config and the
+same `pricewatch` tools as the terminal agent, so you can do all the price work
+from the browser.
+
+It binds to `0.0.0.0` inside the container so you can reach it from your machine,
+and Hermes refuses to do that without an auth provider. Set a password in `.env`:
+
+```ini
+HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin
+HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=<choose one>
+HERMES_DASHBOARD_BASIC_AUTH_SECRET=<random string>   # keeps you signed in across restarts
+```
+
+Without a password the container exits with an explanatory error rather than
+starting something unprotected. The UI build ships prebuilt in the wheel, so the
+service runs with `--skip-build` and needs no npm step.
+
+**Exposing it beyond localhost:** the published port is bound on your machine. If
+you want it reachable from elsewhere, put it behind a tunnel or reverse proxy with
+TLS rather than opening port 9119 — the session cookie is only as safe as the
+transport.
+
+Useful commands:
+
+```bash
+docker compose logs -f dashboard      # startup + request log
+docker compose restart dashboard      # pick up .env changes
+```
 
 ## What actually works
 

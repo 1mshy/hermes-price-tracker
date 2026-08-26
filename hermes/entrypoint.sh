@@ -42,6 +42,19 @@ if [ -d /opt/hermes-skills ]; then
   cp -r /opt/hermes-skills/. "$HERMES_DIR/skills/" 2>/dev/null || true
 fi
 
+# The dashboard binds off loopback, and Hermes requires an auth provider for that.
+# Fail loudly here rather than letting the server start unreachable or unprotected.
+if [ "${1:-}" = "hermes" ] && [ "${2:-}" = "dashboard" ]; then
+  if [ -z "${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:-}" ] && \
+     [ -z "${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH:-}" ]; then
+    echo "ERROR: the dashboard needs a password before it can bind to 0.0.0.0." >&2
+    echo "  Set these in .env, then re-run 'docker compose up -d dashboard':" >&2
+    echo "    HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin" >&2
+    echo "    HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=<choose one>" >&2
+    exit 1
+  fi
+fi
+
 # Wait for the price engine so the first MCP handshake succeeds.
 for _ in $(seq 1 30); do
   if curl -fsS "${PRICEWATCH_HEALTH_URL:-http://pricewatch:8000/api/health}" >/dev/null 2>&1; then

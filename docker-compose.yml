@@ -40,6 +40,26 @@ services:
     tty: true
     restart: "no"
 
+  # ── browser dashboard: chat with the agent, manage config/keys/sessions ──
+  dashboard:
+    build: ./hermes
+    image: hermes-shopping/hermes:1.0.0
+    env_file: [.env]
+    environment:
+      PRICEWATCH_MCP_URL: http://pricewatch:8000/mcp
+      PRICEWATCH_HEALTH_URL: http://pricewatch:8000/api/health
+    # Binding off loopback always requires auth — set the password in .env.
+    command: hermes dashboard --host 0.0.0.0 --port 9119 --no-open --skip-build
+    depends_on:
+      pricewatch:
+        condition: service_healthy
+    ports:
+      - "${HERMES_DASHBOARD_PORT:-9119}:9119"
+    volumes:
+      - hermes_home:/root/.hermes
+      - ./workspace:/work
+    restart: unless-stopped
+
   # ── optional: Signal delivery bridge (docker compose --profile signal up -d) ──
   signal-cli:
     image: bbernhard/signal-cli-rest-api:latest
