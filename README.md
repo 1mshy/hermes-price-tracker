@@ -60,6 +60,24 @@ Without a password the container exits with an explanatory error rather than
 starting something unprotected. The UI build ships prebuilt in the wheel, so the
 service runs with `--skip-build` and needs no npm step.
 
+**Theme:** the dashboard ships eight built-in skins, and Hermes also scans
+`$HERMES_HOME/dashboard-themes/*.yaml` for user themes. `hermes/dashboard-themes/`
+holds ours — the vendored [boring-dark / boring-light](https://github.com/sorenisanerd/hermes-dashboard-themes)
+pair (flat, no teal tint, no grain, system fonts) — and `entrypoint.sh` copies them
+into the agent home on every start, so they show up in the switcher next to the
+built-ins. Pick the active one in `.env`:
+
+```ini
+HERMES_DASHBOARD_THEME=boring-dark   # or boring-light, default, midnight, ember, mono, cyberpunk, rose
+```
+
+`entrypoint.sh` writes that to `dashboard.theme` in the generated `config.yaml`,
+which is also where the UI's own **Switch theme** menu saves — so switching in the
+browser works but is reset on the next `docker compose restart dashboard`. Change
+`.env` for a durable choice. To add another theme, drop its YAML in
+`hermes/dashboard-themes/` and rebuild (`docker compose build dashboard`); the
+directory is baked into the image, so a rebuild is what installs it.
+
 **Exposing it beyond localhost:** the published port is bound on your machine. If
 you want it reachable from elsewhere, put it behind a tunnel or reverse proxy with
 TLS rather than opening port 9119 — the session cookie is only as safe as the

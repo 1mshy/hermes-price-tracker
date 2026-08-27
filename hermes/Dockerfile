@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir "hermes-agent==0.19.0" "mcp>=1.9,<2"
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY skills /opt/hermes-skills
+COPY dashboard-themes /opt/hermes-dashboard-themes
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 WORKDIR /work
