@@ -205,15 +205,21 @@ async def check_notifications(send_test: bool = False) -> dict:
     )
 )
 async def engine_status() -> dict:
+    from .fetch import _CffiSession, fetcher
     return {
         "check_schedule_cron": settings.pw_check_cron,
+        "http_fingerprint": (settings.pw_impersonate if _CffiSession is not None else "unavailable"),
         "browser_fallback_enabled": settings.pw_browser_enabled,
+        "residential_proxy_configured": bool(settings.pw_http_proxy),
         "per_host_requests_per_second": settings.pw_per_host_rps,
         "optional_api_keys": {
             "bestbuy": bool(settings.bestbuy_api_key),
             "ebay": bool(settings.ebay_app_id and settings.ebay_cert_id),
             "keepa_amazon": bool(settings.keepa_api_key),
         },
+        # What the engine has learned about how to reach each host, so repeat
+        # lookups skip the probe: host -> "http" | "browser" | "blocked".
+        "host_fetch_playbook": fetcher.playbook.as_dict(),
         "notification_channels": channel_status(),
     }
 

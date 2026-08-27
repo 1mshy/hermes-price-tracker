@@ -77,18 +77,30 @@ python -m pricewatch.verify`). Latest run: **25 of 38 stores returned a live pri
 | | |
 |---|---|
 | **Shopify JSON** (exact price, in-stock, variants) | Elegoo · Anycubic · Printed Solid · E3D · Slice Engineering · Micro Swiss · West3D · Fabreeko · Filastruder · QIDI · Sovol · Polymaker · Proto-pasta · Atomic Filament · Overture · Fillamentum |
-| **schema.org JSON-LD** | Bambu Lab · Prusa · Creality |
-| **Headless browser + JSON-LD** | MatterHackers · B&H Photo · DigiKey · TH3D |
-| **Headless browser + DOM selectors** | Newegg · 3DJake |
+| **schema.org JSON-LD over fingerprinted HTTP** | Bambu Lab · Prusa · Creality · B&H Photo · DigiKey |
+| **Fingerprinted HTTP + DOM/buy-box** | Amazon · Walmart · Newegg · 3DJake |
+| **Headless browser + JSON-LD** | MatterHackers · TH3D |
+
+**The fast path is a browser TLS fingerprint.** Retail bot walls (Cloudflare,
+Akamai, Amazon) fingerprint the TLS handshake and HTTP/2 settings, not the header
+set — so plain `httpx` gets challenged even with perfect headers. The engine
+sends a real Chrome fingerprint (via `curl_cffi`, `PW_IMPERSONATE`), which clears
+most walls in ~1s with no browser. **Amazon, Walmart, Newegg, B&H and DigiKey now
+read over HTTP with no key and no proxy.** A headless browser is the fallback for
+genuinely JS-rendered pages only.
 
 **Needs a free API key** — Best Buy (`BESTBUY_API_KEY`), eBay (`EBAY_APP_ID` +
-`EBAY_CERT_ID`). Both are implemented; add the key and they start working.
+`EBAY_CERT_ID`) are most reliable with their keys. `KEEPA_API_KEY` makes Amazon
+bulletproof but is no longer required for everyday lookups.
 
-**Bot-walled, will not work by scraping** — Amazon, Walmart, Target, Micro Center,
-Adorama, Mouser. These reject even a real headless Chromium from a normal IP.
-Honest options: set `KEEPA_API_KEY` for Amazon (paid, reliable), or point
-`PW_HTTP_PROXY` at a residential proxy. The adapters are written and will use
-either the moment it is configured.
+**Still IP-walled** — Micro Center, Adorama, Mouser, Target key on IP reputation
+and reject even a real browser from a datacenter address. Point `PW_HTTP_PROXY`
+at a residential proxy; the adapters use it the moment it is configured, and until
+then they fail fast with a clear reason instead of stalling on Chromium.
+
+The engine caches which rung worked per host (a fetch "playbook", visible in
+`engine_status`), so repeat lookups skip straight to it instead of re-probing —
+the agent never has to rediscover how to reach a store.
 
 **Not supported** — SUNLU, KB-3D, LDO Motors, Siboor, Gulf Coast Robotics publish
 no machine-readable price (or block outright). They stay in the catalog so a
@@ -104,16 +116,20 @@ Preference order, per store — cheapest and most reliable first:
 1. **Official API** — Best Buy, eBay, Keepa. Allowed, stable, no scraping.
 2. **Platform JSON** — Shopify `/products/<handle>.js`, WooCommerce Store API.
    Public storefront endpoints, exact prices in minor units, no HTML parsing.
-3. **Structured data** — schema.org JSON-LD (including `ProductGroup`/`hasVariant`,
-   which modern Shopify themes use), microdata, then OpenGraph.
-4. **Headless Chromium** — only when plain HTTP is blocked or the price is
-   rendered client-side.
-5. **Site-specific DOM selectors** — last resort, for stores with no structured
-   data at all (Newegg, 3DJake).
+3. **Fingerprinted HTTP** — a GET with a real Chrome TLS/HTTP2 fingerprint
+   (`curl_cffi`), then schema.org JSON-LD / microdata / OpenGraph, Amazon's
+   buy-box JSON, or site DOM selectors. This is the workhorse for the big-box
+   retailers and clears most bot walls without a browser.
+4. **Headless Chromium** — only when the price is rendered client-side or a wall
+   fingerprints deeper than TLS.
+5. **Residential proxy** — the last resort for IP-reputation walls, via
+   `PW_HTTP_PROXY`.
 
-Requests are rate-limited per hostname (`PW_PER_HOST_RPS`, default 0.4/s) with
-jitter. Unknown domains are sniffed automatically — paste a link to any Shopify
-or WooCommerce store and it will usually just work.
+The cheapest rung that works for each host is cached in a per-host playbook, so
+subsequent reads start there. Requests are rate-limited per hostname
+(`PW_PER_HOST_RPS`, default 0.4/s) with jitter. Unknown domains are sniffed
+automatically — paste a link to any Shopify or WooCommerce store and it will
+usually just work.
 
 ## Alerts
 

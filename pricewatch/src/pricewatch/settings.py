@@ -20,6 +20,17 @@ class Settings(BaseSettings):
     pw_per_host_rps: float = 0.4
     pw_browser_enabled: bool = True
     pw_http_proxy: str = ""
+    # TLS/HTTP2 fingerprint to present on the plain-HTTP path. Modern retail bot
+    # walls (Cloudflare, Akamai, Amazon) fingerprint the ClientHello, not just
+    # headers, so a real-browser fingerprint via curl_cffi clears most of them
+    # without paying for a headless browser. Any curl_cffi target works here
+    # (e.g. chrome, chrome131, chrome124, safari17_0); empty disables it and
+    # falls back to plain httpx.
+    pw_impersonate: str = "chrome"
+    # Where to remember which fetch strategy each host actually needs, so repeat
+    # lookups skip straight to what works instead of re-climbing the ladder.
+    # Empty → derive a path next to the SQLite DB; set to "off" to disable.
+    pw_playbook_path: str = ""
 
     # MCP transport — the server enforces DNS-rebinding protection, so every
     # hostname the agent may reach it by has to be listed.

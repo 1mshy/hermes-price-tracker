@@ -1,8 +1,28 @@
-"""HTTP + headless-browser fetching, with per-host politeness."""
+"""HTTP + headless-browser fetching, with per-host politeness.
+
+Fetch strategy, cheapest first:
+
+  1. HTTP with a real-browser TLS/HTTP2 fingerprint (curl_cffi impersonation).
+     This is the single biggest win: retail bot walls (Cloudflare "Just a
+     moment", Akamai, Amazon) fingerprint the TLS ClientHello and HTTP/2
+     settings, not the header set — so plain httpx gets challenged even with
+     perfect headers, while an impersonated Chrome fingerprint sails through in
+     ~1s. Falls back to plain httpx if curl_cffi is unavailable.
+  2. Headless Chromium — only for genuinely JS-rendered pages, or the handful of
+     sites that fingerprint deeper than TLS.
+  3. Nothing else helps: the remaining walls (Micro Center, Adorama, Mouser) key
+     on IP reputation and need a residential proxy (PW_HTTP_PROXY) or an API key.
+
+A per-host "playbook" remembers which rung actually returned a real page for
+each domain, so repeat lookups jump straight there instead of re-probing —
+which is what makes the agent stop rediscovering how to reach a site every time.
+"""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import random
 import time
 from dataclasses import dataclass
@@ -11,6 +31,11 @@ from urllib.parse import urlsplit
 import httpx
 
 from .settings import settings
+
+try:                                    # optional, but strongly recommended
+    from curl_cffi.requests import AsyncSession as _CffiSession
+except Exception:                       # pragma: no cover - dependency missing
+    _CffiSession = None
 
 log = logging.getLogger(__name__)
 
@@ -34,12 +59,84 @@ CHALLENGE_MARKERS = (
     "just a moment...", "enable javascript and cookies to continue",
     "to discuss automated access", "request unsuccessful. incapsula",
     "are you a human", "unusual traffic from your computer", "access denied",
-    "robot or human", "verify you are a human",
+    "robot or human", "verify you are a human", "enter the characters you see",
+    "type the characters you see", "/sec_cpt/", "captcha-delivery.com",
 )
+
+# Playbook rungs, coarsest first. "http" = a fingerprinted GET returned a real
+# page; "browser" = it needed Chromium; "blocked" = even Chromium failed, so the
+# host almost certainly needs a proxy or API key and should fail fast.
+HTTP, BROWSER, BLOCKED_STRAT = "http", "browser", "blocked"
 
 
 class Blocked(Exception):
     """Site served a bot challenge rather than the product page."""
+
+
+class _Playbook:
+    """Remembers the cheapest fetch rung that worked per host, persisted to disk.
+
+    All IO is best-effort: a read-only or missing data dir must never break
+    fetching, so every failure degrades to an in-memory-only cache.
+    """
+
+    def __init__(self) -> None:
+        self._path = self._resolve_path()
+        self._data: dict[str, str] = {}
+        self._dirty = False
+        self._load()
+
+    @staticmethod
+    def _resolve_path() -> str | None:
+        configured = (settings.pw_playbook_path or "").strip()
+        if configured.lower() == "off":
+            return None
+        if configured:
+            return configured
+        # default: sit next to the SQLite DB when we can find its directory
+        url = settings.pw_db_url
+        if url.startswith("sqlite") and "/" in url:
+            db_path = url.split("///", 1)[-1]
+            directory = os.path.dirname(db_path) or "."
+            return os.path.join(directory, "fetch_playbook.json")
+        return None
+
+    def _load(self) -> None:
+        if not self._path or not os.path.exists(self._path):
+            return
+        try:
+            with open(self._path) as handle:
+                raw = json.load(handle)
+            if isinstance(raw, dict):
+                self._data = {str(k): str(v) for k, v in raw.items()}
+        except Exception as exc:            # noqa: BLE001
+            log.debug("could not load fetch playbook: %s", exc)
+
+    def strategy(self, host: str) -> str | None:
+        return self._data.get(host.removeprefix("www."))
+
+    def record(self, host: str, strategy: str) -> None:
+        host = host.removeprefix("www.")
+        if self._data.get(host) == strategy:
+            return
+        self._data[host] = strategy
+        self._dirty = True
+        self._save()
+
+    def _save(self) -> None:
+        if not self._path or not self._dirty:
+            return
+        try:
+            tmp = f"{self._path}.tmp"
+            with open(tmp, "w") as handle:
+                json.dump(self._data, handle, indent=0, sort_keys=True)
+            os.replace(tmp, self._path)
+            self._dirty = False
+        except Exception as exc:            # noqa: BLE001
+            log.debug("could not persist fetch playbook: %s", exc)
+
+    def as_dict(self) -> dict[str, str]:
+        return dict(self._data)
 
 
 @dataclass
@@ -84,9 +181,11 @@ class Fetcher:
     def __init__(self) -> None:
         self._throttle = _HostThrottle(settings.pw_per_host_rps)
         self._client: httpx.AsyncClient | None = None
+        self._cffi: "_CffiSession | None" = None
         self._playwright = None
         self._browser = None
         self._browser_lock = asyncio.Lock()
+        self.playbook = _Playbook()
 
     async def client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -99,13 +198,46 @@ class Fetcher:
             )
         return self._client
 
+    def _cffi_session(self) -> "_CffiSession | None":
+        if _CffiSession is None or not settings.pw_impersonate:
+            return None
+        if self._cffi is None:
+            kwargs: dict = {"impersonate": settings.pw_impersonate,
+                            "timeout": settings.pw_request_timeout}
+            if settings.pw_http_proxy:
+                kwargs["proxies"] = {"http": settings.pw_http_proxy,
+                                     "https": settings.pw_http_proxy}
+            self._cffi = _CffiSession(**kwargs)
+        return self._cffi
+
+    async def _get_cffi(self, url: str, headers: dict | None) -> Page | None:
+        """One GET with a real-browser TLS/HTTP2 fingerprint; None if unusable."""
+        session = self._cffi_session()
+        if session is None:
+            return None
+        response = await session.get(url, headers=headers or None, allow_redirects=True)
+        text = response.text or ""
+        return Page(str(response.url), response.status_code, text, "http")
+
     async def get(self, url: str, *, headers: dict | None = None, retries: int = 2) -> Page:
+        """Fingerprinted GET first; fall back to plain httpx if that path is gone.
+
+        Returns whatever the transport produced (including challenge pages) —
+        callers decide what to do via ``Page.looks_blocked``.
+        """
         host = urlsplit(url).netloc
-        client = await self.client()
         last: Exception | None = None
         for attempt in range(retries + 1):
             await self._throttle.wait(host)
             try:
+                page = await self._get_cffi(url, headers)
+                if page is not None:
+                    return page
+            except Exception as exc:                       # noqa: BLE001 — network is messy
+                last = exc
+                log.debug("cffi fetch failed for %s: %s", url, exc)
+            try:
+                client = await self.client()
                 response = await client.get(url, headers=headers or None)
                 return Page(str(response.url), response.status_code, response.text, "http")
             except Exception as exc:                       # noqa: BLE001 — network is messy
@@ -172,20 +304,65 @@ class Fetcher:
         finally:
             await context.close()
 
-    async def get_or_render(self, url: str, *, wait_for: str | None = None) -> Page:
-        """Plain HTTP first; escalate to Chromium only if that looks blocked."""
+    @staticmethod
+    def _usable(page: Page) -> bool:
+        return not page.looks_blocked and len(page.text) > 2_000
+
+    async def get_or_render(self, url: str, *, wait_for: str | None = None,
+                            browser_first: bool = False) -> Page:
+        """Fetch by the cheapest rung known to work for this host, escalating only
+        when needed, and remember the outcome so the next lookup starts there.
+
+        ``browser_first`` is for JS-rendered stores whose plain HTML carries a
+        stale or partial price: skip straight to the browser unless the playbook
+        has already proven the fast HTTP path works for this host.
+        """
+        host = urlsplit(url).netloc.removeprefix("www.")
+        known = self.playbook.strategy(host)
+
+        # Hosts that even Chromium could not crack: try the fast path once (walls
+        # do get lifted) but do not pay for a browser we expect to fail.
+        if known == BLOCKED_STRAT:
+            try:
+                page = await self.get(url)
+                if self._usable(page):
+                    self.playbook.record(host, HTTP)
+                    return page
+            except Exception as exc:                       # noqa: BLE001
+                log.debug("http fetch failed for %s: %s", url, exc)
+            raise Blocked(f"{host} is known to block automated fetches — "
+                          "set PW_HTTP_PROXY (residential) or a store API key")
+
+        # Try the fast HTTP path unless we already know this host needs a browser
+        # (or the caller asked to prefer one and we have not proven HTTP works).
+        skip_http = known == BROWSER or (browser_first and known != HTTP)
+        if not skip_http:
+            try:
+                page = await self.get(url)
+                if self._usable(page):
+                    self.playbook.record(host, HTTP)
+                    return page
+            except Exception as exc:                       # noqa: BLE001
+                log.debug("http fetch failed for %s: %s", url, exc)
+
         try:
-            page = await self.get(url)
-            if not page.looks_blocked and len(page.text) > 2_000:
-                return page
-        except Exception as exc:
-            log.debug("http fetch failed for %s: %s", url, exc)
-        return await self.render(url, wait_for=wait_for)
+            page = await self.render(url, wait_for=wait_for)
+        except Blocked:
+            self.playbook.record(host, BLOCKED_STRAT)
+            raise
+        self.playbook.record(host, BROWSER if self._usable(page) else BLOCKED_STRAT)
+        return page
 
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+        if self._cffi is not None:
+            try:
+                await self._cffi.close()
+            except Exception:                              # noqa: BLE001
+                pass
+            self._cffi = None
         if self._browser is not None:
             await self._browser.close()
             self._browser = None

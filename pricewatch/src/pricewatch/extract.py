@@ -208,6 +208,25 @@ def from_embedded_json(page_text: str) -> Extracted:
     return Extracted(price=min(prices), method="embedded-json")
 
 
+# Amazon (and a few other CDNs) ship the buy-box price as a precise JSON pair
+# rather than schema.org data. It appears once, at the real price, so it is far
+# safer than scraping the many `a-offscreen` spans a PDP carries.
+_PRICE_AMOUNT_RE = re.compile(
+    r'"priceAmount"\s*:\s*(\d+(?:\.\d{1,2})?)\s*,\s*"currencySymbol"\s*:\s*"([^"]{1,4})"'
+)
+
+
+def from_price_amount(page_text: str) -> Extracted:
+    match = _PRICE_AMOUNT_RE.search(page_text[:1_500_000])
+    if not match:
+        return Extracted()
+    price = parse_price(match.group(1))
+    if price is None:
+        return Extracted()
+    return Extracted(price=price, currency=detect_currency(match.group(2), "") or None,
+                     method="price-amount")
+
+
 def extract(page_text: str, *, default_currency: str = "USD") -> Extracted:
     try:
         doc = lxml_html.fromstring(page_text)
@@ -222,9 +241,11 @@ def extract(page_text: str, *, default_currency: str = "USD") -> Extracted:
                 found.title = re.sub(r"\s+", " ", found.title).strip()[:400]
             return found
 
-    found = from_embedded_json(page_text)
-    if found.ok:
-        titles = doc.xpath("//h1//text()")
-        found.title = re.sub(r"\s+", " ", " ".join(titles)).strip()[:400] or None
-        found.currency = detect_currency(page_text[:4000], default_currency)
+    for reader in (from_price_amount, from_embedded_json):
+        found = reader(page_text)
+        if found.ok:
+            titles = doc.xpath("//title//text()") or doc.xpath("//h1//text()")
+            found.title = re.sub(r"\s+", " ", " ".join(titles)).strip()[:400] or None
+            found.currency = found.currency or detect_currency(page_text[:4000], default_currency)
+            return found
     return found

@@ -50,6 +50,37 @@ Call `check_notifications` if the user is unsure whether alerts will reach them;
 it reports which of Discord / Signal / WhatsApp are configured and can send a
 test message.
 
+## How the engine fetches (don't reinvent it)
+
+The MCP tools already handle anti-bot fetching for you — there is no need to open
+a terminal and `curl` a store yourself, and doing so is less reliable than the
+engine. Under the hood every read goes through one ladder, cheapest rung first:
+
+1. **HTTP with a real-browser TLS/HTTP2 fingerprint.** This clears the common
+   walls (Cloudflare "Just a moment", Akamai, and Amazon) in about a second —
+   which is why `get_price` on an Amazon URL now returns a price with no Keepa
+   key for most listings.
+2. **Headless browser**, only for genuinely JS-rendered pages.
+3. **Give up fast** for the few stores whose walls key on IP reputation.
+
+The engine remembers which rung worked for each store (a per-host "playbook"), so
+repeat lookups skip straight to it instead of re-probing. You do **not** need to
+figure out how to reach a store — just call the tool once and read the result.
+
+What this means when a read fails:
+
+- **Micro Center, Adorama, Mouser, Target** need a residential proxy
+  (`PW_HTTP_PROXY`) or an official API — retrying won't help. Report the store as
+  blocked and move on; don't loop on it.
+- **Best Buy** and **eBay** are most reliable with their free API keys; without
+  them coverage is partial.
+- **Amazon** reads over HTTP now; `KEEPA_API_KEY` is only needed for hardened
+  pages or heavy use, not the common case.
+
+Call `engine_status` to see the current fingerprint, whether a proxy/keys are
+configured, and the learned playbook — use it to explain *why* a store failed
+rather than guessing or hand-fetching.
+
 ## Reporting results
 
 - Lead with the cheapest in-stock option, then list the alternatives.

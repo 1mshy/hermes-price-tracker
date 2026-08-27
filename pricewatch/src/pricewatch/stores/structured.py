@@ -28,12 +28,11 @@ class StructuredAdapter(StoreAdapter):
     async def fetch_offer(self, url: str) -> StoreResult:
         store = self.name if self.domains else host_of(url)
         try:
-            if self.force_browser:
-                page = await fetcher.render(url, wait_for=self.wait_for)
-            else:
-                page = await fetcher.get(url)
-                if page.looks_blocked or len(page.text) < 2_000:
-                    page = await fetcher.render(url, wait_for=self.wait_for)
+            # get_or_render tries the fast fingerprinted HTTP path first, escalates
+            # to a browser only when a host needs it, and records the outcome so a
+            # proxy-walled store fails fast next time instead of re-spinning Chromium.
+            page = await fetcher.get_or_render(
+                url, wait_for=self.wait_for, browser_first=self.force_browser)
         except Blocked as exc:
             return StoreResult(store=store, url=url, error=str(exc), method="blocked")
         except Exception as exc:
