@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from .aliexpress import AliExpressAdapter
 from .apis import BestBuyAdapter, EbayAdapter
 from .base import StoreAdapter, StoreResult, host_of
 from .bigbox import AmazonAdapter, SelectorAdapter, WalmartAdapter
@@ -19,6 +20,7 @@ _API_ADAPTERS: dict[str, type[StoreAdapter]] = {
     "bestbuy": BestBuyAdapter,
     "walmart": WalmartAdapter,
     "ebay": EbayAdapter,
+    "aliexpress": AliExpressAdapter,
 }
 
 

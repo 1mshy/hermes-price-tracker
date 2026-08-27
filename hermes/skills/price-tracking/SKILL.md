@@ -43,6 +43,13 @@ model) and reports what it searched in `search_terms_used`. So if a comparison
 still comes back empty, the product genuinely is not in the store catalogs —
 say that rather than retrying the same tool with reworded queries.
 
+Some marketplaces are **search-only**: AliExpress prices appear in
+`compare_prices` (frequently the cheapest, since OEMs sell direct there) but
+its product pages cannot be re-read, so those listings cannot be tracked —
+`track_product_description` will say so and list the matches. Offer to track
+the same product at a supported store, and quote the AliExpress price as a
+point-in-time comparison.
+
 ## Setting up an alert
 
 Every watch needs at least one condition:

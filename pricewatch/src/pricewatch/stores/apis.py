@@ -10,8 +10,11 @@ import re
 import time
 from urllib.parse import quote
 
+from lxml import html as lxml_html
+
+from ..extract import extract
 from ..fetch import fetcher
-from ..money import parse_price
+from ..money import detect_currency, parse_price
 from ..settings import settings
 from .base import StoreAdapter, StoreResult
 
@@ -110,8 +113,10 @@ class EbayAdapter(StoreAdapter):
         token = await self._access_token()
         item_id = re.search(r"/itm/(?:[^/]+/)?(\d{9,15})", url)
         if not token:
-            return StoreResult(store=self.name, url=url, method="needs-key",
-                               error="EBAY_APP_ID/EBAY_CERT_ID not set")
+            # Keyless fallback: item pages ship schema.org JSON-LD and read
+            # fine over the fingerprinted HTTP path. The API stays preferred
+            # when configured — it is stable and returns the true buy-box offer.
+            return await self._fetch_keyless(url, item_id.group(1) if item_id else None)
         if not item_id:
             return StoreResult(store=self.name, url=url, error="no item id in eBay URL")
         endpoint = f"https://api.ebay.com/buy/browse/v1/item/v1|{item_id.group(1)}|0"
@@ -127,10 +132,30 @@ class EbayAdapter(StoreAdapter):
                            .get("estimatedAvailabilityStatus") != "OUT_OF_STOCK",
                            sku=data.get("legacyItemId"), method="ebay-api")
 
+    async def _fetch_keyless(self, url: str, item_id: str | None) -> StoreResult:
+        try:
+            page = await fetcher.get(url)
+        except Exception as exc:                       # noqa: BLE001 — network
+            return StoreResult(store=self.name, url=url, error=f"fetch failed: {exc}")
+        if page.status != 200 or page.looks_blocked:
+            return StoreResult(
+                store=self.name, url=url, method="needs-key",
+                error=(f"eBay page unavailable keylessly (HTTP {page.status}) — "
+                       "set EBAY_APP_ID/EBAY_CERT_ID for the reliable API path"))
+        found = extract(page.text)
+        if not found.ok:
+            return StoreResult(store=self.name, url=page.url, method="http:failed",
+                               error="no structured price on eBay page "
+                                     "(possibly an ended or variant listing)")
+        return StoreResult(store=self.name, url=page.url, title=found.title,
+                           price=found.price, currency=found.currency or "USD",
+                           in_stock=found.in_stock, sku=item_id or found.sku,
+                           method=f"http:{found.method}")
+
     async def search(self, query: str, limit: int = 5) -> list[StoreResult]:
         token = await self._access_token()
         if not token:
-            return []
+            return await self._search_keyless(query, limit)
         endpoint = (f"https://api.ebay.com/buy/browse/v1/item_summary/search"
                     f"?q={quote(query)}&limit={limit}&filter=conditions:{{NEW}}")
         try:
@@ -147,6 +172,67 @@ class EbayAdapter(StoreAdapter):
                                        in_stock=True, sku=item.get("legacyItemId"),
                                        method="ebay-api"))
         return results
+
+    async def _search_keyless(self, query: str, limit: int) -> list[StoreResult]:
+        """Buy-It-Now, new-condition search over the public results page."""
+        url = (f"https://www.ebay.com/sch/i.html?_nkw={quote(query)}"
+               "&LH_BIN=1&LH_ItemCondition=1000")
+        try:
+            page = await fetcher.get(url)
+        except Exception:                              # noqa: BLE001 — network
+            return []
+        if page.status != 200 or page.looks_blocked:
+            return []
+        return _parse_ebay_search(page.text, store=self.name, limit=limit)
+
+
+def _parse_ebay_search(raw: str, store: str = "ebay", limit: int = 5) -> list[StoreResult]:
+    """Result cards from the keyless search page (s-card__*/su-card markup).
+
+    Auction noise is pre-filtered by the LH_BIN query; placeholder "Shop on
+    eBay" tiles and cards without a price are skipped.
+    """
+    try:
+        doc = lxml_html.fromstring(raw)
+    except Exception:                                  # noqa: BLE001
+        return []
+    results: list[StoreResult] = []
+    seen: set[str] = set()
+    for link in doc.xpath('//a[contains(@href, "/itm/")]'):
+        match = re.search(r"/itm/(\d{9,15})", link.get("href") or "")
+        if not match or match.group(1) in seen:
+            continue
+        # Climb to the smallest ancestor that actually contains both a title
+        # and a price node — class names churn, the structure does not.
+        card = None
+        for ancestor in link.iterancestors():
+            classes = ancestor.get("class") or ""
+            if "card" not in classes and "s-item" not in classes:
+                continue
+            if (ancestor.xpath('.//*[contains(@class, "__title")]')
+                    and ancestor.xpath('.//*[contains(@class, "__price")]')):
+                card = ancestor
+                break
+        if card is None:
+            continue
+        title = " ".join(
+            card.xpath('.//*[contains(@class, "__title")]')[0].text_content().split())
+        price_text = card.xpath('.//*[contains(@class, "__price")]')[0].text_content()
+        price = parse_price(price_text)
+        if not title or price is None or title.lower().startswith("shop on ebay"):
+            continue
+        seen.add(match.group(1))
+        results.append(StoreResult(
+            store=store, url=f"https://www.ebay.com/itm/{match.group(1)}",
+            title=title, price=price,
+            currency=detect_currency(price_text, "USD"),
+            in_stock=True, sku=match.group(1), method="ebay-html",
+            extra={"note": "keyless HTML search result — confirm with get_price "
+                           "on the item URL before quoting as the final price"},
+        ))
+        if len(results) >= limit:
+            break
+    return results
 
 
 class KeepaAmazon:

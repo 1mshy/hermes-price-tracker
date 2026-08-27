@@ -48,6 +48,9 @@ class StoreAdapter:
     domains: tuple[str, ...] = ()
     #: set when the store needs an API key we may not have
     requires_key: str | None = None
+    #: False for search-only marketplaces: compare works, but fetch_offer
+    #: cannot re-read a product page, so sweeps/tracking must skip them.
+    trackable: bool = True
 
     def matches(self, url: str) -> bool:
         host = host_of(url)

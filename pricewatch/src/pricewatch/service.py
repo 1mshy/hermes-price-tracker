@@ -47,6 +47,13 @@ async def _search_ranked(query: str, *, stores: list[str] | None,
     return ranked, len(found), query
 
 
+def _is_trackable(store_key: str) -> bool:
+    """Search-only marketplaces (e.g. AliExpress) can be compared but not
+    swept — creating offers for them would only accumulate fetch errors."""
+    adapter = ADAPTERS.get(store_key)
+    return adapter is None or getattr(adapter, "trackable", True)
+
+
 # ─────────────────────────── registration ────────────────────────────────
 async def track_url(url: str, *, target_price: float | None = None, drop_pct: float | None = None,
                     label: str = "", channels: str = "", cooldown_hours: int = 12) -> dict:
@@ -94,7 +101,14 @@ async def track_query(description: str, *, stores: list[str] | None = None,
         return {"ok": False, "error": "no store listing matched that description",
                 "searched": searched, "search_terms_tried": query_used}
 
-    keep = ranked[:max_offers]
+    keep = [r for r in ranked if _is_trackable(r.store)][:max_offers]
+    if not keep:
+        return {"ok": False,
+                "error": ("matches found only on search-only stores that cannot be "
+                          "tracked — compare_prices shows their current prices; "
+                          "track a specific URL at a supported store instead"),
+                "matches": [r.as_dict() for r in ranked[:5]],
+                "search_terms_tried": query_used}
     cheapest = min(keep, key=lambda r: r.price)
 
     def write(session: Session) -> dict:
@@ -162,7 +176,7 @@ async def find_more_stores(product_id: int, *, threshold: float = 74.0,
 
     found = await search_stores(matching.search_terms(title) or title,
                                 store_keys=stores, limit_per_store=3)
-    fresh = [r for r in found if r.url not in existing]
+    fresh = [r for r in found if r.url not in existing and _is_trackable(r.store)]
     ranked = matching.rank(title, fresh, key=lambda r: r.title, threshold=threshold)[:max_new]
 
     def write(session: Session) -> dict:

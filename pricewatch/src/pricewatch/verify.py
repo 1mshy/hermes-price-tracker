@@ -20,11 +20,12 @@ from urllib.parse import urljoin, urlsplit
 
 from .fetch import fetcher
 from .stores.catalog import CATALOG
-from .stores.registry import fetch_offer, searchable
+from .stores.registry import ADAPTERS, fetch_offer, searchable
 
 # How a product URL looks at stores that need link-scraping to find one.
 PRODUCT_PATTERNS: dict[str, str] = {
     "amazon": r"/dp/[A-Z0-9]{10}",
+    "ebay": r"/itm/\d{9,15}",
     "bestbuy": r"/site/[^\s\"']*\d{7}\.p",
     "walmart": r"/ip/[^\s\"']*\d{6,}",
     "target": r"/p/[^\s\"']*A-\d+",
@@ -129,7 +130,19 @@ async def discover_product_url(entry: dict, allow_browser: bool) -> tuple[str | 
         if found:
             return found, label
     found = await _from_homepage(host, entry["key"], allow_browser)
-    return (found, "homepage-scrape") if found else (None, "not-found")
+    if found:
+        return found, "homepage-scrape"
+    # Last resort: a searchable store can name its own product page (works for
+    # marketplaces like eBay whose homepage carries no direct item links).
+    if searchable(entry["key"]):
+        try:
+            hits = await ADAPTERS[entry["key"]].search(
+                entry.get("probe_query", "3d printer filament"), limit=3)
+            if hits:
+                return hits[0].url, "adapter-search"
+        except Exception:
+            pass
+    return None, "not-found"
 
 
 def _classify(result, url: str | None) -> str:
@@ -145,6 +158,8 @@ def _classify(result, url: str | None) -> str:
         return "NEEDS-KEY"
     if "blocked" in method or "challenge" in error or "403" in error:
         return "BLOCKED"
+    if "unsupported" in method:
+        return "LIMITED"      # search-only store: compare works, tracking does not
     return "FAIL"
 
 
@@ -180,7 +195,7 @@ async def verify_store(entry: dict, allow_browser: bool, timeout: float) -> dict
     }
 
 
-ICONS = {"OK": "✅", "BLOCKED": "🚫", "NEEDS-KEY": "🔑", "FAIL": "❌",
+ICONS = {"OK": "✅", "LIMITED": "🔎", "BLOCKED": "🚫", "NEEDS-KEY": "🔑", "FAIL": "❌",
          "TIMEOUT": "⏱", "ERROR": "💥", "NO-URL": "❓"}
 
 
@@ -205,7 +220,7 @@ def render_table(rows: list[dict]) -> str:
         f"{'':2} {'STORE':<22} {'CATEGORY':<12} {'STATUS':<10} {'PRICE':>10}  {'METHOD':<22} NOTE",
         "─" * 118,
     ]
-    order = {"OK": 0, "NEEDS-KEY": 1, "BLOCKED": 2, "FAIL": 3, "TIMEOUT": 4, "ERROR": 5, "NO-URL": 6}
+    order = {"OK": 0, "LIMITED": 0.5, "NEEDS-KEY": 1, "BLOCKED": 2, "FAIL": 3, "TIMEOUT": 4, "ERROR": 5, "NO-URL": 6}
     for row in sorted(rows, key=lambda r: (order.get(r["status"], 9), r["key"])):
         price = f"{row['price']:,.2f}" if row.get("price") is not None else "—"
         note = row.get("error") or (row.get("title") or "")

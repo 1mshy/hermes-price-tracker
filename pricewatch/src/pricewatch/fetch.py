@@ -150,6 +150,11 @@ class Page:
     def looks_blocked(self) -> bool:
         if self.status in (401, 403, 429) or self.status >= 500:
             return True
+        # Some walls (eBay's splashui) redirect to a clean-looking challenge
+        # page that returns 200 and none of the body markers.
+        final = self.url.lower()
+        if "/splashui/challenge" in final or "captcha" in final:
+            return True
         head = self.text[:200_000].lower()
         return any(marker in head for marker in CHALLENGE_MARKERS)
 

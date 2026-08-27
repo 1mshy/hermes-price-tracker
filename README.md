@@ -94,9 +94,16 @@ most walls in ~1s with no browser. **Amazon, Walmart, Newegg, B&H and DigiKey no
 read over HTTP with no key and no proxy.** A headless browser is the fallback for
 genuinely JS-rendered pages only.
 
-**Needs a free API key** — Best Buy (`BESTBUY_API_KEY`), eBay (`EBAY_APP_ID` +
-`EBAY_CERT_ID`) are most reliable with their keys. `KEEPA_API_KEY` makes Amazon
-bulletproof but is no longer required for everyday lookups.
+**Marketplaces** — eBay now reads keylessly (fingerprinted HTTP + JSON-LD on
+item pages, HTML parsing for search); `EBAY_APP_ID` + `EBAY_CERT_ID` remain the
+most reliable path. AliExpress is **search-only**: `compare_prices` returns live
+USD prices from its search page (often the cheapest source — OEMs like SUNLU
+sell direct), but product pages block automated reads, so AliExpress listings
+cannot be tracked and the tools say so instead of failing silently.
+
+**Needs a free API key** — Best Buy (`BESTBUY_API_KEY`) requires its key.
+`KEEPA_API_KEY` makes Amazon bulletproof but is no longer required for everyday
+lookups.
 
 **Still IP-walled** — Micro Center, Adorama, Mouser, Target key on IP reputation
 and reject even a real browser from a datacenter address. Point `PW_HTTP_PROXY`
