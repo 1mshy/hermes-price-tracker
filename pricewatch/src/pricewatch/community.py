@@ -29,6 +29,14 @@ _ATOM = "{http://www.w3.org/2005/Atom}"
 #: Where 3D-printing / tech deal chatter actually happens.
 DEFAULT_SUBREDDITS = ("3Dprinting", "BambuLab", "3dbargains", "buildapcsales")
 
+
+def _default_subreddits() -> tuple[str, ...]:
+    """PW_COMMUNITY_SUBREDDITS overrides the built-in set."""
+    from .settings import settings
+    configured = tuple(
+        s.strip() for s in settings.pw_community_subreddits.split(",") if s.strip())
+    return configured or DEFAULT_SUBREDDITS
+
 #: Price-looking tokens in free text: "$49.99", "C$142", "CAD 138.73", "€18".
 _PRICE_RE = re.compile(
     r"(?:USD|CAD|EUR|GBP|C\$|US\$|A\$|\$|€|£)\s?\d{1,5}(?:[.,]\d{2})?", re.I)
@@ -146,7 +154,7 @@ async def search(query: str, subreddits: list[str] | None = None,
     short. Results include any dollar amounts mentioned, so the agent can
     triage "people say it was $50" claims without opening every thread.
     """
-    subs = list(subreddits or DEFAULT_SUBREDDITS)[:5]
+    subs = list(subreddits or _default_subreddits())[:5]
     window = "week" if days <= 7 else "month" if days <= 31 else "year"
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
 

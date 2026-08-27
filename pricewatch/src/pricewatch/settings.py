@@ -39,8 +39,16 @@ class Settings(BaseSettings):
     # scheduling
     pw_check_cron: str = "*/30 * * * *"
 
+    # community intel: comma-separated default subreddits for community_pulse
+    # (blank = the built-in 3D-printing/deal set)
+    pw_community_subreddits: str = ""
+
     # notifications
     discord_webhook_url: str = ""
+    # ntfy.sh push — zero-account: set an unguessable topic, subscribe to it
+    # in the ntfy app. NTFY_SERVER supports self-hosted instances.
+    ntfy_topic: str = ""
+    ntfy_server: str = "https://ntfy.sh"
     signal_api_url: str = ""
     signal_from: str = ""
     signal_to: str = ""

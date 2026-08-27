@@ -6,6 +6,7 @@ import logging
 
 from .base import Alert, Channel
 from .discord import DiscordChannel
+from .ntfy import NtfyChannel
 from .signal import SignalChannel
 from .whatsapp import CallMeBotWhatsAppChannel, TwilioWhatsAppChannel
 
@@ -13,6 +14,7 @@ log = logging.getLogger(__name__)
 
 CHANNELS: list[Channel] = [
     DiscordChannel(),
+    NtfyChannel(),
     SignalChannel(),
     TwilioWhatsAppChannel(),
     CallMeBotWhatsAppChannel(),

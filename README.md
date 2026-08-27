@@ -156,7 +156,10 @@ notifying while a flat price stays quiet.
 
 Configure channels in `.env`:
 
-- **Discord** — `DISCORD_WEBHOOK_URL`. Easiest; no bot needed.
+- **ntfy push** — `NTFY_TOPIC`. The fastest path to real push: no account,
+  just pick an unguessable topic and subscribe to it in the
+  [ntfy app](https://ntfy.sh). Treat the topic name like a password.
+- **Discord** — `DISCORD_WEBHOOK_URL`. Easiest webhook; no bot needed.
 - **Signal** — `docker compose --profile signal up -d signal-cli`, register the
   number, then set `SIGNAL_FROM` / `SIGNAL_TO`.
 - **WhatsApp** — Twilio (`TWILIO_*`) or CallMeBot (`CALLMEBOT_*`, no account).

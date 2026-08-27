@@ -151,8 +151,10 @@ async def broaden_coverage(product_id: int, max_new: int = 6) -> dict:
 
 @mcp.tool(
     description=(
-        "Show recorded price history for a tracked product, newest first. Use it to answer "
-        "'is this actually a good deal' — compare the current price against the recent range."
+        "Show recorded price history for a tracked product, newest first, plus a summary "
+        "with the current best price, lowest/highest/average seen, and a plain verdict "
+        "('at or near the lowest recorded price' / 'above the recorded average'). Use it "
+        "to answer 'is this actually a good deal' with the verdict, not a number dump."
     )
 )
 async def get_price_history(product_id: int, limit: int = 100) -> dict:
@@ -182,9 +184,11 @@ async def list_stores() -> dict:
 
 @mcp.tool(
     description=(
-        "Report which notification channels are configured (Discord, Signal, WhatsApp) and "
-        "optionally send a test message to confirm delivery end to end. Use this when the user "
-        "asks whether alerts will actually reach them."
+        "Report which notification channels are configured (Discord, ntfy push, Signal, "
+        "WhatsApp) and optionally send a test message to confirm delivery end to end. Use "
+        "this when the user asks whether alerts will actually reach them. If none are "
+        "configured, suggest ntfy: pick an unguessable topic, subscribe in the ntfy app, "
+        "set NTFY_TOPIC in .env — no account needed."
     )
 )
 async def check_notifications(send_test: bool = False) -> dict:

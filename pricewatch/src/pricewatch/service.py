@@ -410,7 +410,36 @@ async def price_history(product_id: int, limit: int = 200) -> dict:
             select(PricePoint).join(Offer).where(Offer.product_id == product_id)
             .order_by(PricePoint.observed_at.desc()).limit(limit)
         ).all()
+
+        # "Is this actually a good deal?" deserves a direct answer, not a
+        # list of numbers. Stats stick to one currency so a CAD point never
+        # skews a USD average.
+        best = _best_offer(session, product_id)
+        summary = None
+        if points:
+            currency = best.currency if best else points[0].currency
+            relevant = [p.price for p in points if p.currency == currency] \
+                or [p.price for p in points]
+            current = (best.last_price if best and best.last_price is not None
+                       else relevant[0])
+            lowest, highest = min(relevant), max(relevant)
+            average = sum(relevant) / len(relevant)
+            if current <= lowest * Decimal("1.02"):
+                verdict = "at or near the lowest recorded price"
+            elif current <= average:
+                verdict = "below the recorded average"
+            else:
+                verdict = "above the recorded average"
+            summary = {
+                "current_best": float(current), "currency": currency,
+                "lowest_seen": float(lowest), "highest_seen": float(highest),
+                "average": round(float(average), 2),
+                "observations": len(relevant),
+                "verdict": verdict,
+            }
+
         return {"ok": True, "product_id": product_id, "title": product.title,
+                "summary": summary,
                 "points": [{"offer_id": p.offer_id, "price": float(p.price),
                             "currency": p.currency, "in_stock": p.in_stock,
                             "at": p.observed_at.isoformat()} for p in points]}
