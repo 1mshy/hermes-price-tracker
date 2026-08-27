@@ -8,6 +8,7 @@ from .aliexpress import AliExpressAdapter
 from .apis import BestBuyAdapter, EbayAdapter
 from .base import StoreAdapter, StoreResult, host_of
 from .bigbox import AmazonAdapter, SelectorAdapter, WalmartAdapter
+from ..money import usd_sort_key
 from .catalog import CATALOG, PRINT3D, TECH, keys_for_tag
 from .shopify import ShopifyAdapter, looks_like_shopify
 from .structured import StructuredAdapter
@@ -116,7 +117,9 @@ async def search_stores(query: str, store_keys: list[str] | None = None,
 
     batches = await asyncio.gather(*(one(k) for k in ordered))
     results = [r for batch in batches for r in batch if r.ok]
-    results.sort(key=lambda r: r.price)
+    # Stores answer in their own currencies (amazon.ca in CAD, Prusa in EUR…);
+    # sort by an indicative USD value so CAD 96 does not outrank USD 99.
+    results.sort(key=lambda r: usd_sort_key(r.price, r.currency))
     return results
 
 

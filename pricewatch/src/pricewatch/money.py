@@ -81,6 +81,25 @@ def cents_to_decimal(cents) -> Decimal | None:
     return value if value > 0 else None
 
 
+# Indicative rates for ORDERING mixed-currency results only — never for
+# display. Close enough that a CAD 96 listing no longer outranks USD 99;
+# quoted prices always keep their original currency.
+_INDICATIVE_USD_RATE = {
+    "USD": Decimal("1"), "CAD": Decimal("0.73"), "EUR": Decimal("1.08"),
+    "GBP": Decimal("1.27"), "AUD": Decimal("0.65"), "JPY": Decimal("0.0066"),
+    "CHF": Decimal("1.12"), "SEK": Decimal("0.095"), "PLN": Decimal("0.25"),
+    "CZK": Decimal("0.043"),
+}
+
+
+def usd_sort_key(price: Decimal | None, currency: str | None) -> Decimal:
+    """Approximate USD value for sorting; unknown currencies sort as-is."""
+    if price is None:
+        return Decimal("Infinity")
+    rate = _INDICATIVE_USD_RATE.get((currency or "USD").upper(), Decimal("1"))
+    return price * rate
+
+
 def fmt(amount: Decimal | float | None, currency: str = "USD") -> str:
     if amount is None:
         return "n/a"

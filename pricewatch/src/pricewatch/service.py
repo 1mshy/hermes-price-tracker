@@ -507,6 +507,12 @@ async def compare(query: str, stores: list[str] | None = None, limit_per_store: 
     """One-shot price comparison — no tracking, just what it costs right now."""
     ranked, _, query_used = await _search_ranked(
         query, stores=stores, limit_per_store=limit_per_store, threshold=threshold)
-    return {"query": query, "search_terms_used": query_used, "count": len(ranked),
-            "results": [r.as_dict() for r in ranked],
-            "stores_searched": stores or sorted(ADAPTERS)}
+    out = {"query": query, "search_terms_used": query_used, "count": len(ranked),
+           "results": [r.as_dict() for r in ranked],
+           "stores_searched": stores or sorted(ADAPTERS)}
+    currencies = {r.currency for r in ranked if r.currency}
+    if len(currencies) > 1:
+        out["note"] = (f"results span {', '.join(sorted(currencies))}; ordering "
+                       "uses an indicative conversion — always quote each price "
+                       "in its own currency")
+    return out
