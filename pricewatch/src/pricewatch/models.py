@@ -99,6 +99,16 @@ class Tracker(Base):
     product: Mapped[Product] = relationship(back_populates="trackers")
 
 
+class Setting(Base):
+    """Tiny KV store for engine settings adjustable at runtime (sweep cron…)."""
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[str] = mapped_column(String(500))
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class AlertEvent(Base):
     __tablename__ = "alert_events"
 

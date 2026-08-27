@@ -36,15 +36,20 @@ def parse_price(raw) -> Decimal | None:
     number = re.sub(r"[\s' ]", "", match.group(1))
 
     last_comma, last_dot = number.rfind(","), number.rfind(".")
-    if last_comma > last_dot:                 # 1.234,56
-        number = number.replace(".", "").replace(",", ".")
-    elif last_dot > last_comma:               # 1,234.56
-        number = number.replace(",", "")
-    else:                                     # only one kind of separator, or none
-        sep = "," if last_comma >= 0 else "."
-        if sep == ",":
-            tail = number.split(",")[-1]
-            number = number.replace(",", "." if len(tail) == 2 else "")
+    if last_comma >= 0 and last_dot >= 0:
+        if last_comma > last_dot:             # 1.234,56
+            number = number.replace(".", "").replace(",", ".")
+        else:                                 # 1,234.56
+            number = number.replace(",", "")
+    elif last_comma >= 0:
+        # Commas only: "12,99" is a decimal comma, but "1,299" (and
+        # "1,299,000") are US thousands groups — a 3-digit tail or several
+        # commas means separator, not cents.
+        tail = number.split(",")[-1]
+        decimal_comma = len(tail) == 2 and number.count(",") == 1
+        number = number.replace(",", "." if decimal_comma else "")
+    elif number.count(".") > 1:               # 1.234.567 — EU thousands only
+        number = number.replace(".", "")
     try:
         value = Decimal(number)
     except InvalidOperation:

@@ -23,6 +23,30 @@ log = logging.getLogger(__name__)
 _SWEEP_CONCURRENCY = 6
 
 
+async def _search_ranked(query: str, *, stores: list[str] | None,
+                         limit_per_store: int, threshold: float) -> tuple[list, int, str]:
+    """Fan out a store search and rank the hits against the full query.
+
+    Store search endpoints (Shopify suggest, Woo Store API, retail APIs) are
+    AND-ish — every extra token narrows the result set — so a fully specified
+    description often returns nothing even when the product is listed. When
+    that happens, retry once with the compact core (leading brand/product
+    tokens + model designators) while still ranking against the full
+    description. Returns (ranked, searched_count, query_used).
+    """
+    found = await search_stores(query, store_keys=stores, limit_per_store=limit_per_store)
+    ranked = matching.rank(query, found, key=lambda r: r.title, threshold=threshold)
+    if ranked:
+        return ranked, len(found), query
+
+    core = matching.search_terms(query)
+    if core and core.split() != matching.normalise(query).split():
+        found = await search_stores(core, store_keys=stores, limit_per_store=limit_per_store)
+        ranked = matching.rank(query, found, key=lambda r: r.title, threshold=threshold)
+        return ranked, len(found), core
+    return ranked, len(found), query
+
+
 # ─────────────────────────── registration ────────────────────────────────
 async def track_url(url: str, *, target_price: float | None = None, drop_pct: float | None = None,
                     label: str = "", channels: str = "", cooldown_hours: int = 12) -> dict:
@@ -64,11 +88,11 @@ async def track_query(description: str, *, stores: list[str] | None = None,
                       max_offers: int = 8, threshold: float = 70.0,
                       channels: str = "", cooldown_hours: int = 12) -> dict:
     """Search stores for a described product and track every plausible match."""
-    found = await search_stores(description, store_keys=stores, limit_per_store=3)
-    ranked = matching.rank(description, found, key=lambda r: r.title, threshold=threshold)
+    ranked, searched, query_used = await _search_ranked(
+        description, stores=stores, limit_per_store=3, threshold=threshold)
     if not ranked:
         return {"ok": False, "error": "no store listing matched that description",
-                "searched": len(found)}
+                "searched": searched, "search_terms_tried": query_used}
 
     keep = ranked[:max_offers]
     cheapest = min(keep, key=lambda r: r.price)
@@ -98,7 +122,8 @@ async def track_query(description: str, *, stores: list[str] | None = None,
                     {"store": o.store, "url": o.url, "price": float(o.last_price or 0)}
                     for o in offers
                 ],
-                "best_price": float(cheapest.price), "best_store": cheapest.store}
+                "best_price": float(cheapest.price), "best_store": cheapest.store,
+                "search_terms_used": query_used}
 
     return await in_db(write)
 
@@ -135,7 +160,8 @@ async def find_more_stores(product_id: int, *, threshold: float = 74.0,
         return {"ok": False, "error": f"no product {product_id}"}
     title, existing = loaded
 
-    found = await search_stores(title, store_keys=stores, limit_per_store=3)
+    found = await search_stores(matching.search_terms(title) or title,
+                                store_keys=stores, limit_per_store=3)
     fresh = [r for r in found if r.url not in existing]
     ranked = matching.rank(title, fresh, key=lambda r: r.title, threshold=threshold)[:max_new]
 
@@ -377,6 +403,32 @@ async def price_history(product_id: int, limit: int = 200) -> dict:
     return await in_db(read)
 
 
+async def list_alerts(limit: int = 30) -> dict:
+    """Recent fired alerts, newest first — the audit trail for 'did it work?'."""
+    def read(session: Session) -> list[dict]:
+        events = session.scalars(
+            select(AlertEvent).order_by(AlertEvent.id.desc()).limit(limit)).all()
+        rows = []
+        for event in events:
+            tracker = session.get(Tracker, event.tracker_id)
+            offer = session.get(Offer, event.offer_id) if event.offer_id else None
+            rows.append({
+                "id": event.id,
+                "tracker_id": event.tracker_id,
+                "label": tracker.label if tracker else None,
+                "price": float(event.price),
+                "reason": event.reason,
+                "store": offer.store if offer else None,
+                "url": offer.url if offer else None,
+                "channels_tried": event.channels,
+                "delivered": event.delivered,
+                "detail": event.detail,
+                "at": event.created_at.isoformat(),
+            })
+        return rows
+    return {"alerts": await in_db(read)}
+
+
 async def set_tracker(tracker_id: int, **changes) -> dict:
     def write(session: Session) -> dict:
         tracker = session.get(Tracker, tracker_id)
@@ -409,8 +461,8 @@ async def delete_tracker(tracker_id: int) -> dict:
 async def compare(query: str, stores: list[str] | None = None, limit_per_store: int = 3,
                   threshold: float = 65.0) -> dict:
     """One-shot price comparison — no tracking, just what it costs right now."""
-    found = await search_stores(query, store_keys=stores, limit_per_store=limit_per_store)
-    ranked = matching.rank(query, found, key=lambda r: r.title, threshold=threshold)
-    return {"query": query, "count": len(ranked),
+    ranked, _, query_used = await _search_ranked(
+        query, stores=stores, limit_per_store=limit_per_store, threshold=threshold)
+    return {"query": query, "search_terms_used": query_used, "count": len(ranked),
             "results": [r.as_dict() for r in ranked],
             "stores_searched": stores or sorted(ADAPTERS)}

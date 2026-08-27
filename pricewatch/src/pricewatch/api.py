@@ -4,7 +4,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import service
+from . import community, service
+from . import scheduler as sweep_scheduler
 from .notify import Alert, channel_status, dispatch
 from .stores.registry import catalog_summary, fetch_offer
 
@@ -123,6 +124,40 @@ async def history(product_id: int, limit: int = 200) -> dict:
     if not result.get("ok"):
         raise HTTPException(status_code=404, detail=result)
     return result
+
+
+@router.get("/alerts")
+async def alerts(limit: int = 30) -> dict:
+    return await service.list_alerts(limit=limit)
+
+
+@router.get("/community")
+async def community_search(query: str = Query(..., description="product to look for"),
+                           days: int = 14, limit: int = 20) -> dict:
+    return await community.search(query, days=days, limit=limit)
+
+
+@router.get("/community/thread")
+async def community_thread(url: str = Query(..., description="reddit.com thread URL"),
+                           max_comments: int = 15) -> dict:
+    return await community.thread(url, max_comments=max_comments)
+
+
+class ScheduleIn(BaseModel):
+    cron: str
+
+
+@router.get("/schedule")
+async def schedule() -> dict:
+    return sweep_scheduler.current()
+
+
+@router.patch("/schedule")
+async def set_schedule(body: ScheduleIn) -> dict:
+    try:
+        return {"ok": True, **sweep_scheduler.reschedule(body.cron)}
+    except sweep_scheduler.ScheduleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.post("/refresh")

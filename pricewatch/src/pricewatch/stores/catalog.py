@@ -15,7 +15,7 @@ PARTS = "components"
 
 CATALOG: list[dict] = [
     # ── big-box / general tech ───────────────────────────────────────────
-    {"key": "amazon",       "label": "Amazon",            "kind": "api",        "tags": [TECH, PRINT3D], "domains": ("amazon.com",),
+    {"key": "amazon",       "label": "Amazon",            "kind": "api",        "tags": [TECH, PRINT3D], "domains": ("amazon.com", "amazon.ca", "amazon.co.uk", "amazon.de"),
      "probe": "https://www.amazon.com/dp/B0FWJBDX6Z",
      "note": "Read over HTTP with a browser TLS fingerprint (no key needed for most PDPs); set KEEPA_API_KEY for hardened pages and bulk reliability."},
     {"key": "bestbuy",      "label": "Best Buy",          "kind": "api",        "tags": [TECH],          "domains": ("bestbuy.com",),

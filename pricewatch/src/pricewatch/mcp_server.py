@@ -10,7 +10,8 @@ import logging
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
-from . import service
+from . import community, service
+from . import scheduler as sweep_scheduler
 from .notify import Alert, channel_status, dispatch
 from .stores.registry import catalog_summary, fetch_offer
 from .settings import settings
@@ -206,8 +207,10 @@ async def check_notifications(send_test: bool = False) -> dict:
 )
 async def engine_status() -> dict:
     from .fetch import _CffiSession, fetcher
+    schedule = sweep_scheduler.current()
     return {
-        "check_schedule_cron": settings.pw_check_cron,
+        "sweep_schedule": schedule,
+        "check_schedule_cron": schedule["cron"],
         "http_fingerprint": (settings.pw_impersonate if _CffiSession is not None else "unavailable"),
         "browser_fallback_enabled": settings.pw_browser_enabled,
         "residential_proxy_configured": bool(settings.pw_http_proxy),
@@ -222,6 +225,62 @@ async def engine_status() -> dict:
         "host_fetch_playbook": fetcher.playbook.as_dict(),
         "notification_channels": channel_status(),
     }
+
+
+@mcp.tool(
+    description=(
+        "Search recent Reddit posts for community chatter about a product — deal threads, "
+        "coupon codes, and price claims ('people are getting these for $50'). Searches the "
+        "3D-printing and deal subreddits by default (3Dprinting, BambuLab, 3dbargains, "
+        "buildapcsales); pass subreddits to override. Returns recent posts newest first, "
+        "each with any prices mentioned in the text. Community claims are unverified "
+        "leads — confirm with get_price or compare_prices before quoting a price from here."
+    )
+)
+async def community_pulse(query: str, subreddits: list[str] | None = None,
+                          days: int = 14, limit: int = 20) -> dict:
+    return await community.search(query, subreddits=subreddits, days=days, limit=limit)
+
+
+@mcp.tool(
+    description=(
+        "Read one Reddit thread — the post plus its top comments — by its reddit.com URL. "
+        "Works via RSS, which Reddit serves even where its JSON API is blocked, so do not "
+        "hand-fetch reddit.com with curl. Use it to check what a deal thread actually says "
+        "(coupon terms, region, expiry) before relaying a community price claim."
+    )
+)
+async def read_reddit_thread(url: str, max_comments: int = 15) -> dict:
+    return await community.thread(url, max_comments=max_comments)
+
+
+@mcp.tool(
+    description=(
+        "Change how often every tracked price is re-checked (the sweep schedule). Takes a "
+        "standard 5-field cron expression evaluated in UTC — '*/15 * * * *' is every 15 "
+        "minutes, '0 9 * * *' is daily at 09:00 UTC. The engine refuses schedules more "
+        "frequent than every 5 minutes to stay polite to retailers. Pass 'default' to "
+        "revert to the configured default. Takes effect immediately, survives restarts, "
+        "and returns the active schedule with the next sweep time."
+    )
+)
+async def set_sweep_schedule(cron: str) -> dict:
+    try:
+        return {"ok": True, **sweep_scheduler.reschedule(cron)}
+    except sweep_scheduler.ScheduleError as exc:
+        return {"ok": False, "error": str(exc), **sweep_scheduler.current()}
+
+
+@mcp.tool(
+    description=(
+        "Show the most recent fired price alerts, newest first: which tracker fired, at "
+        "what price, why, and whether any notification channel actually delivered it. Use "
+        "this to answer 'has anything triggered?' — especially when no notification "
+        "channels are configured, which makes fired alerts otherwise invisible."
+    )
+)
+async def list_alert_events(limit: int = 30) -> dict:
+    return await service.list_alerts(limit=limit)
 
 
 def build_mcp_app():
