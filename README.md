@@ -8,13 +8,13 @@ or WhatsApp when something gets cheap.
 ```
 ┌────────────┐   MCP over HTTP    ┌─────────────────────────────┐
 │  hermes    │ ─────────────────► │  pricewatch                 │
-│  (agent)   │                    │  • 38 store adapters        │
+│  (agent)   │                    │  • 39 store adapters        │
 └─────┬──────┘                    │  • price history (SQLite)   │
       │ OpenAI API                │  • scheduled sweeps         │
       ▼                           │  • alert rules              │
  http://10.150.0.30:1234/v1       └──────────┬──────────────────┘
  (vLLM · Qwen3.8-27B)                        │
-                                   Discord / Signal / WhatsApp
+                                   ntfy / Discord / Signal / WhatsApp
 ```
 
 ## Quick start
