@@ -21,9 +21,12 @@ or WhatsApp when something gets cheap.
 
 ```bash
 cp .env.example .env          # then edit: model endpoint, dashboard password, channels
-docker compose up -d pricewatch dashboard
+docker compose up -d pricewatch dashboard gateway
 docker compose run --rm hermes          # interactive agent in the terminal
 ```
+
+(`gateway` is the cron ticker — without it, scheduled agent jobs never fire;
+see *Scheduled agent jobs* below.)
 
 Then open **http://localhost:9119** and sign in.
 
@@ -32,6 +35,8 @@ Then just talk to it:
 > *"What does a Bambu Lab P1S Combo cost right now?"*
 > *"Track https://store.creality.com/products/k1-se-3d-printer and tell me if it drops 12%."*
 > *"Watch for Polymaker PolyTerra PLA 1kg matte black under $18 anywhere."*
+> *"Reddit says people are getting the SUNLU AMS heater for $50 — is that real?"*
+> *"Check my tracked prices every 15 minutes instead."*
 > *"What am I tracking, and has anything moved?"*
 
 ## Browser dashboard
@@ -152,6 +157,63 @@ Configure channels in `.env`:
 Check delivery end to end: `curl -XPOST localhost:8077/api/notify/test`, or ask
 the agent *"can you send me a test alert?"*.
 
+Every fired alert is also recorded whether or not a channel delivered it —
+`list_alert_events` (or `GET /api/alerts`) is the audit trail, which matters
+when no channel is configured yet and alerts would otherwise be invisible.
+
+The sweep cadence itself is live-adjustable: the agent's `set_sweep_schedule`
+tool (or `PATCH /api/schedule`) takes a 5-field UTC cron expression, refuses
+anything more frequent than every 5 minutes, persists across restarts, and
+`GET /api/schedule` shows the active schedule with the next sweep time.
+
+## Community intel (Reddit)
+
+Deal chatter usually precedes the price move — "$50 with the checkout coupon"
+threads are how the good deals actually surface. The engine reads Reddit over
+its public RSS feeds (the JSON API blocks datacenter clients; RSS is served
+freely) with the same per-host politeness throttle as everything else:
+
+- `community_pulse` — recent posts across the deal subreddits (3Dprinting,
+  BambuLab, 3dbargains, buildapcsales by default), newest first, with any
+  prices mentioned in the text extracted per post.
+- `read_reddit_thread` — one thread with its top comments: coupon code,
+  region, expiry, whether the deal died.
+
+Both are also on the REST API (`GET /api/community?query=…`,
+`GET /api/community/thread?url=…`). Community prices are unverified leads by
+design — the tools say so in their output, and the skill tells the agent to
+confirm with `get_price` before quoting one.
+
+## Scheduled agent jobs (hermes cron)
+
+Price watches don't need cron — trackers re-check themselves on the sweep
+schedule. Hermes cron is for what the engine can't do alone: a morning Reddit
+deals briefing, or a silent no-LLM watchdog script for a store the engine
+reports as blocked (see `hermes/skills/price-tracking/price-watch-fallback/`).
+
+Two pieces make agent-created cron jobs actually work, and both are wired into
+`docker-compose.yml`:
+
+1. **`HERMES_INTERACTIVE=1`** on the `hermes` and `dashboard` services — the
+   agent's `cronjob` tool is gated on an interactive-capable session and never
+   loads without it.
+2. **The `gateway` service** — hermes' cron ticker only runs inside a gateway
+   process (`hermes cron status` says exactly this). It shares the agent home
+   volume, so jobs created from the dashboard or terminal fire here.
+
+Useful commands:
+
+```bash
+docker compose exec gateway hermes cron list     # what's scheduled, next runs
+docker compose exec gateway hermes cron runs     # execution history
+docker compose exec gateway hermes cron status   # is the ticker alive
+```
+
+Delivery: with no messaging platform connected, job output is local-only (the
+user sees it on their next chat; `cron runs` shows it). Connect a platform
+with `hermes gateway setup` for push delivery — or just use pricewatch
+trackers, which push through Discord/Signal/WhatsApp on their own.
+
 ## Model configuration
 
 `hermes/entrypoint.sh` renders `~/.hermes/config.yaml` from `.env` on every start,
@@ -161,7 +223,7 @@ Three settings matter for a self-hosted endpoint, and all three are load-bearing
 
 | Setting | Why |
 |---|---|
-| `LLM_CONTEXT_LENGTH=65536` | Hermes assumes a 256K window when it cannot detect one, and refuses to run below 64K. Set your server's real `max_model_len`. |
+| `LLM_CONTEXT_LENGTH=131072` | Hermes assumes a 256K window when it cannot detect one, and refuses to run below 64K. Set your server's real `max_model_len` (`curl $LLM_BASE_URL/models` reports it). |
 | `LLM_MAX_TOKENS=8192` | Left alone, Hermes requests `max_tokens == context_length`; vLLM requires `prompt + max_tokens <= max_model_len`, so every call would fail once and retry. |
 | `mcp>=1.9,<2` (in the image) | hermes-agent 0.19 imports `streamablehttp_client`, which mcp 2.x renamed. The price engine serves MCP with 2.x — separate images, no conflict. |
 
@@ -177,6 +239,11 @@ curl -XPOST localhost:8077/api/trackers/url -H 'Content-Type: application/json' 
      -d '{"url":"https://...","drop_pct":12}'
 curl localhost:8077/api/trackers
 curl -XPOST localhost:8077/api/refresh
+curl localhost:8077/api/alerts
+curl "localhost:8077/api/community?query=sunlu+ams+heater"
+curl localhost:8077/api/schedule
+curl -XPATCH localhost:8077/api/schedule -H 'Content-Type: application/json' \
+     -d '{"cron":"*/15 * * * *"}'
 ```
 
 Interactive docs at `localhost:8077/docs`.
@@ -194,6 +261,17 @@ Product URLs go stale constantly, so the harness **discovers a live product per
 store** at run time (Shopify catalog → sitemap → homepage scrape) rather than
 trusting hardcoded links, and reports `OK` / `BLOCKED` / `NEEDS-KEY` / `FAIL`
 separately so a bot-wall is never confused with a broken parser.
+
+## Running the tests
+
+The engine has an offline unit suite (price parsing, product matching, HTML
+extraction, Reddit feed parsing, alert rules, schedule validation — no network):
+
+```bash
+cd pricewatch
+uv venv .venv && uv pip install -p .venv/bin/python -e . pytest
+.venv/bin/python -m pytest tests/ -q
+```
 
 ## Adding a store
 
