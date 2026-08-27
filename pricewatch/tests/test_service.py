@@ -88,6 +88,15 @@ def test_upsert_records_price_points_only_on_change():
         assert offer.lowest_price == Decimal("90")
 
 
+def test_offer_dict_exposes_error_streak():
+    offer = Offer(product_id=1, store="example", url="https://example.com/x",
+                  currency="USD", last_price=Decimal("10"),
+                  last_error="bot challenge", consecutive_errors=4, active=True)
+    row = service._offer_dict(offer)
+    assert row["consecutive_errors"] == 4
+    assert row["error"] == "bot challenge"
+
+
 def test_upsert_failure_keeps_last_price_and_counts_errors():
     init_db()
     with session_scope() as session:

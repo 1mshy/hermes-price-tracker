@@ -199,7 +199,14 @@ confirm with `get_price` before quoting one.
 Price watches don't need cron — trackers re-check themselves on the sweep
 schedule. Hermes cron is for what the engine can't do alone: a morning Reddit
 deals briefing, or a silent no-LLM watchdog script for a store the engine
-reports as blocked (see `hermes/skills/price-tracking/price-watch-fallback/`).
+reports as blocked (see `hermes/skills/price-tracking/price-watch-fallback/`,
+which also ships `templates/pricewatch_health_watchdog.py` — a silent 6-hourly
+job that speaks up only when the engine is down or a tracked listing has
+failed 3+ sweeps in a row).
+
+Schedule syntax matters: `"6h"` means **once**, in six hours. For recurring
+jobs use a cron expression (`"0 */6 * * *"`) — `hermes cron list` shows
+`Repeat: ∞` when you got it right.
 
 Two pieces make agent-created cron jobs actually work, and both are wired into
 `docker-compose.yml`:
@@ -281,6 +288,12 @@ extraction, Reddit feed parsing, alert rules, schedule validation — no network
 cd pricewatch
 uv venv .venv && uv pip install -p .venv/bin/python -e . pytest
 .venv/bin/python -m pytest tests/ -q
+```
+
+Agent-level smoke (drives the real LLM through the MCP + cron surface):
+
+```bash
+./scripts/agent-smoke.sh
 ```
 
 ## Adding a store

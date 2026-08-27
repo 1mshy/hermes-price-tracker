@@ -371,7 +371,8 @@ def _offer_dict(offer: Offer) -> dict:
             "lowest": float(offer.lowest_price) if offer.lowest_price is not None else None,
             "currency": offer.currency, "in_stock": offer.in_stock, "method": offer.method,
             "last_checked": offer.last_checked_at.isoformat() if offer.last_checked_at else None,
-            "error": offer.last_error}
+            "error": offer.last_error,
+            "consecutive_errors": offer.consecutive_errors}
 
 
 async def list_tracked() -> list[dict]:
