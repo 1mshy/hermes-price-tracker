@@ -1,8 +1,8 @@
 ---
 name: price-tracking
-description: Research prices across tech and 3D-printing retailers and set up price-drop alerts. Use whenever the user asks what something costs, where it is cheapest, whether a deal is good, or asks to be told when a price falls.
+description: Research prices across tech and 3D-printing retailers, check Reddit deal chatter, and set up price-drop alerts and scheduled checks. Use whenever the user asks what something costs, where it is cheapest, whether a deal is good, mentions a price seen on Reddit, or asks to be told when a price falls.
 metadata:
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # Price research and tracking
@@ -22,6 +22,9 @@ returns, with the store name and URL beside every figure.
 | "What am I watching?" | `list_trackers` |
 | "Is this actually a good price?" | `get_price_history` |
 | "Check right now" | `refresh_prices_now` |
+| "Reddit says people get these for $50" | `community_pulse`, then `read_reddit_thread` |
+| "Check my prices more/less often" | `set_sweep_schedule` |
+| "Did any alert actually fire?" | `list_alert_events` |
 
 ## Identifying the product precisely
 
@@ -33,6 +36,12 @@ tracking the wrong variant produces confidently wrong alerts.
 
 Watch for near-miss models: MK4S is not MK4, P1S is not P1P, and an A1 mini is not
 an A1. If results come back mixing these, say so and confirm which one they meant.
+
+Over-specifying does not break search anymore: when a fully detailed description
+returns nothing, the engine automatically retries with the compact core (brand +
+model) and reports what it searched in `search_terms_used`. So if a comparison
+still comes back empty, the product genuinely is not in the store catalogs —
+say that rather than retrying the same tool with reworded queries.
 
 ## Setting up an alert
 
@@ -48,7 +57,54 @@ condition, and which channels will notify them.
 
 Call `check_notifications` if the user is unsure whether alerts will reach them;
 it reports which of Discord / Signal / WhatsApp are configured and can send a
-test message.
+test message. When **no channel is configured**, alerts still fire and are
+recorded — surface them with `list_alert_events` — but nothing pushes to the
+user. Say that plainly when you create a watch in that state.
+
+## Community deal intel (Reddit)
+
+When the user cites community chatter ("people on reddit are getting these for
+$50"), do **not** hand-fetch reddit.com with curl — Reddit's JSON API blocks
+this host and manual RSS scraping wastes dozens of steps. Use the tools:
+
+- `community_pulse` — searches the deal subreddits (3Dprinting, BambuLab,
+  3dbargains, buildapcsales by default) over RSS and returns recent posts,
+  newest first, with any prices mentioned in the text.
+- `read_reddit_thread` — opens one thread (post + top comments) to get the
+  specifics: coupon code, region, expiry, whether the deal is dead.
+
+Community prices are unverified leads. Confirm with `get_price` before
+repeating one, and distinguish a time-boxed coupon ("$50 off until Monday,
+Amazon US only") from a standing price — the difference decides whether the
+right move is "buy now" or "set a tracker".
+
+## Scheduling: trackers first, cron jobs second
+
+Two schedulers exist. Choose deliberately:
+
+1. **pricewatch trackers** (the default). Anything created with `track_*` is
+   re-checked automatically on the engine's sweep schedule and alerts through
+   the configured channels. For "watch this price" requests, creating the
+   tracker **is** the complete setup — no cron job needed. If the user wants
+   faster or slower re-checks, call `set_sweep_schedule` (5-field cron, UTC;
+   the engine refuses anything more frequent than every 5 minutes).
+2. **hermes cron jobs** (the `cronjob` tool) — only for work the price engine
+   cannot do by itself: a periodic Reddit sweep with `community_pulse`, a
+   watchdog for a store the engine reports as blocked (see the
+   price-watch-fallback skill's no_agent script pattern), or a recurring
+   morning deals briefing.
+
+After creating a cron job, verify it: run `cronjob action=list` and confirm the
+job shows as scheduled with a next-run time. If the cronjob tool is not
+available in your session, say so — do not silently fall back to pretending a
+watch exists.
+
+Delivery honesty: cron output without a connected messaging platform is
+**local-only** (`hermes cron runs` shows it; the user sees results on their
+next chat, not as a push). Pricewatch tracker alerts push only through the
+channels `check_notifications` reports as configured. Whenever you set up
+either kind of schedule, state exactly how — and whether — the user will be
+notified.
 
 ## How the engine fetches (don't reinvent it)
 
