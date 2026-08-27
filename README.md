@@ -75,7 +75,7 @@ docker compose restart dashboard      # pick up .env changes
 ## What actually works
 
 Verified live against every store in the catalog (`docker compose exec pricewatch
-python -m pricewatch.verify`). Latest run: **25 of 38 stores returned a live price.**
+python -m pricewatch.verify`). Latest run (2026-08-27): **27 of 39 stores returned a live price** (the rest: 4 documented IP-reputation walls, 1 keyless API, 1 search-only marketplace, and stores with no machine-readable price).
 
 **Working without any API key (22 of them 3D printing):**
 
