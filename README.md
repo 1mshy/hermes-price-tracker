@@ -145,7 +145,8 @@ so the agent can explain gaps instead of quietly dropping a retailer.
 Preference order, per store — cheapest and most reliable first:
 
 1. **Official API** — Best Buy, eBay, Keepa. Allowed, stable, no scraping.
-2. **Platform JSON** — Shopify `/products/<handle>.js`, WooCommerce Store API.
+2. **Platform JSON** — Shopify `/products/<handle>.js` (falling back to the
+   older `.json` view on themes that gate it), WooCommerce Store API.
    Public storefront endpoints, exact prices in minor units, no HTML parsing.
 3. **Fingerprinted HTTP** — a GET with a real Chrome TLS/HTTP2 fingerprint
    (`curl_cffi`), then schema.org JSON-LD / microdata / OpenGraph, Amazon's
@@ -160,7 +161,8 @@ The cheapest rung that works for each host is cached in a per-host playbook, so
 subsequent reads start there. Requests are rate-limited per hostname
 (`PW_PER_HOST_RPS`, default 0.4/s) with jitter. Unknown domains are sniffed
 automatically — paste a link to any Shopify or WooCommerce store and it will
-usually just work.
+usually just work. Shopify is recognised from an open `/products.json` or, where
+a store gates that, from the `cdn.shopify.com` fingerprint its own theme leaks.
 
 ## Currency and region
 
@@ -184,8 +186,16 @@ What a preference actually changes:
   rather than needing conversion. AliExpress's locale cookie is pinned to the
   same market, so its search returns CAD directly.
 - **Shopify stores report the right money.** Shopify's product JSON gives cents
-  and no currency at all; the engine reads the storefront's domain
-  (`ca.…` → CAD) rather than assuming USD.
+  and no currency at all, so the engine asks the storefront itself — one cached
+  `/cart.js` read per market — and only falls back to the domain (`ca.…` → CAD)
+  when that fails. A Montreal shop on a `.com` was otherwise quoted in USD.
+- **Shopify Markets is a price list, not a translation.** One storefront serves
+  several markets behind locale prefixes, each with its own currency *and its
+  own prices*: `shop.polymaker.com` quotes US$25.99 for the spool `/en-ca/`
+  quotes at CA$36.99. Search moves to the market that bills in your currency,
+  so those prices are native rather than converted. A URL you paste keeps
+  whatever market it names — the prefix is preserved into every endpoint, and
+  tracking a `/en-ca/` link keeps following the Canadian price.
 - **Foreign listings are labelled, not converted.** A store that bills in
   another currency keeps its own figure. Beside it the result carries
   `approx_in_preferred` — an indicative conversion the agent is instructed to
