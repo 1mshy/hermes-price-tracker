@@ -101,7 +101,14 @@ async def track_query(description: str, *, stores: list[str] | None = None,
         return {"ok": False, "error": "no store listing matched that description",
                 "searched": searched, "search_terms_tried": query_used}
 
-    keep = [r for r in ranked if _is_trackable(r.store)][:max_offers]
+    trackable = [r for r in ranked if _is_trackable(r.store)]
+    # A renewed or open-box unit undercuts the new price by enough to always win
+    # the `min` below — and that pick is permanent: it sets the baseline every
+    # later drop is measured against, names the product, and becomes the
+    # cheapest offer the sweep re-reads. One refurb here quietly turns the whole
+    # tracker into a refurb tracker. Kept only when that is all there is.
+    as_new = [r for r in trackable if not r.extra.get("condition")]
+    keep = (as_new or trackable)[:max_offers]
     if not keep:
         return {"ok": False,
                 "error": ("matches found only on search-only stores that cannot be "

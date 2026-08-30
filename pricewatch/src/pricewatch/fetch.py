@@ -150,6 +150,13 @@ class Page:
     def looks_blocked(self) -> bool:
         if self.status in (401, 403, 429) or self.status >= 500:
             return True
+        # A plain 404 is a dead product, not a wall. Amazon's own "Page Not
+        # Found" body carries the "to discuss automated access" footer, so
+        # trusting body markers here would send every retired ASIN to the
+        # browser and then report a bot challenge that never happened — and,
+        # via get_or_render, pin the whole host to "blocked" in the playbook.
+        if self.status == 404:
+            return False
         # Some walls (eBay's splashui) redirect to a clean-looking challenge
         # page that returns 200 and none of the body markers.
         final = self.url.lower()

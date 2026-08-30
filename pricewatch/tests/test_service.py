@@ -138,3 +138,49 @@ def test_list_alerts_round_trip():
     assert top["price"] == 42.0
     assert top["delivered"] is False
     assert top["store"] == "example"
+
+
+# ── condition guards on what gets tracked ────────────────────────────────
+def _offer(store, price, title, **extra):
+    return StoreResult(store=store, url=f"https://{store}.example/dp/{price}", title=title,
+                       price=Decimal(str(price)), currency="CAD", in_stock=True, extra=extra)
+
+
+def _track(monkeypatch, results):
+    init_db()
+
+    async def ranked(query, **kwargs):
+        return results, len(results), query
+
+    monkeypatch.setattr(service, "_search_ranked", ranked)
+    return asyncio.run(service.track_query("logitech mx master 3s", drop_pct=10))
+
+
+def test_a_renewed_unit_never_becomes_the_tracking_baseline(monkeypatch):
+    # The refurb is cheapest, so an unguarded min() would make every future
+    # "drop" a comparison against a different product.
+    out = _track(monkeypatch, [
+        _offer("amazon", "114.99", "Logitech MX Master 3S (Renewed)", condition="renewed"),
+        _offer("amazon", "139.99", "Logitech MX Master 3S Wireless Mouse"),
+    ])
+    assert out["ok"]
+    assert out["best_price"] == 139.99
+    assert "Renewed" not in out["title"]
+    assert [o["price"] for o in out["offers"]] == [139.99]
+
+
+def test_refurbs_are_still_tracked_when_nothing_else_is_listed(monkeypatch):
+    out = _track(monkeypatch, [
+        _offer("amazon", "114.99", "Logitech MX Master 3S (Renewed)", condition="renewed"),
+    ])
+    assert out["ok"]
+    assert out["best_price"] == 114.99
+
+
+def test_listings_without_a_condition_flag_are_treated_as_new(monkeypatch):
+    out = _track(monkeypatch, [
+        _offer("amazon", "129.99", "Logitech MX Master 3S Wireless Mouse"),
+        _offer("bestbuy", "139.99", "Logitech MX Master 3S"),
+    ])
+    assert out["best_price"] == 129.99
+    assert len(out["offers"]) == 2

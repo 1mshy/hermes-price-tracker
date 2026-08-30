@@ -38,6 +38,13 @@ class StoreResult:
             "method": self.method,
             "error": self.error,
         }
+        # Adapters use `extra` for the caveats that decide whether a figure is
+        # quotable at all — a search-result price that may be a variant, a
+        # renewed unit, a paid placement. Dropping it here left every one of
+        # those unsaid.
+        details = {k: v for k, v in self.extra.items() if v is not None}
+        if details:
+            payload["extra"] = details
         approximate = self.approx_in_preferred()
         if approximate is not None:
             payload["approx_in_preferred"] = approximate

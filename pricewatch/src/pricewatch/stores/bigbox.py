@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import json
 import re
+from urllib.parse import quote_plus
 
 from lxml import html as lxml_html
 
+from .. import matching
 from ..extract import extract
 from ..fetch import Blocked, fetcher
 from ..money import detect_currency, parse_price
@@ -29,6 +31,103 @@ _TLD_CURRENCY = {"ca": "CAD", "co.uk": "GBP", "de": "EUR", "fr": "EUR",
 # The precise buy-box JSON pair; the many `a-offscreen` spans are the fallback.
 _PRICE_AMOUNT_RE = re.compile(
     r'"priceAmount"\s*:\s*(\d+(?:\.\d{1,2})?)\s*,\s*"currencySymbol"\s*:\s*"([^"]{1,4})"')
+
+
+# Paid placements announce themselves inside the title itself; left in place
+# the prefix drags every sponsored card's similarity score around.
+_SPONSORED_RE = re.compile(r"^\s*sponsored ad\s*[-\u2013\u2014:]\s*", re.I)
+
+# A search for a product returns the product padded out with things that merely
+# fit it — "Case for X", "Mouse Feet Compatible with X". Those titles contain
+# every query token, so similarity alone scores them level with the real thing
+# and a top-3 cut comes back as three accessories. Demoted, not dropped: the
+# query may itself be asking for one.
+_ACCESSORY_RE = re.compile(
+    r"\b(compatible with|replacements? for|for use with|screen protector|"
+    r"carrying case|travel case|dust cover|mouse feet|grip tape|decal|sticker)\b", re.I)
+
+# "Renewed"/"Refurbished" units undercut the new price by enough to look like a
+# deal that is not one, so mark them rather than let them pass as a buy box.
+# A bare "used" is deliberately absent: it shows up in ordinary copy ("used by
+# professionals"), and this flag now decides what gets tracked, so a false
+# positive costs a real listing.
+_CONDITION_RE = re.compile(r"\b(renewed|refurbished|pre-?owned|open box)\b", re.I)
+
+
+def _looks_like_accessory(title: str, query_tokens: set[str]) -> bool:
+    """Is this something *for* the product asked about, rather than the product?
+
+    A keyword list never keeps up with how many ways Amazon phrases this, but
+    the position of the query's own words gives it away: "Grip Tape **for
+    Logitech MX Master 3S**" carries them in its tail, while "Logitech MX
+    Master 3S **for Business**" is the product itself with a qualifier.
+    """
+    if _ACCESSORY_RE.search(title):
+        return True
+    parts = re.split(r"\bfor\b", title, maxsplit=1, flags=re.I)
+    if len(parts) != 2 or not query_tokens:
+        return False
+    head = set(matching.normalise(parts[0]).split())
+    tail = set(matching.normalise(parts[1]).split())
+    return len(query_tokens & tail) > len(query_tokens & head)
+
+
+def parse_amazon_search(raw: str, storefront: str = "amazon.com",
+                        currency: str = "USD", limit: int = 60) -> list[StoreResult]:
+    """Listings from an Amazon `/s?k=` results page.
+
+    Each card already carries everything a comparison needs — ASIN, full title,
+    buy-box price, list price — so no per-product fetch is required to shortlist.
+    The full title is only on the h2's `aria-label`: the h2's own spans start
+    with a separate brand node, so reading its text yields just "Logitech".
+    """
+    try:
+        doc = lxml_html.fromstring(raw)
+    except Exception:                                  # noqa: BLE001 — bad markup
+        return []
+    results: list[StoreResult] = []
+    seen: set[str] = set()
+    for card in doc.xpath("//div[@data-component-type='s-search-result']"):
+        asin = (card.get("data-asin") or "").strip()
+        if not asin or asin in seen:
+            continue
+        title = next((t.strip() for t in card.xpath(".//h2/@aria-label") if t.strip()), None)
+        if not title:
+            title = next((t.strip() for t in
+                          card.xpath(".//a[contains(@class,'s-line-clamp')]//span/text()")
+                          if t.strip()), None)
+        # Exact class match: the strikethrough list price is `a-price a-text-price`.
+        price_text = next((t for t in
+                           card.xpath(".//span[@class='a-price']/span[@class='a-offscreen']/text()")
+                           if t.strip()), None)
+        price = parse_price(price_text) if price_text else None
+        if not title or price is None:
+            continue                                   # accessory strips, ad slots
+        sponsored = bool(_SPONSORED_RE.match(title))
+        title = _SPONSORED_RE.sub("", title)
+        extra: dict = {"note": "search-result price — Amazon lists the cheapest "
+                               "variant, so confirm with get_price on the URL "
+                               "before quoting it as final"}
+        if sponsored:
+            extra["sponsored"] = True
+        was = next((t for t in card.xpath(".//span[@data-a-strike='true']//text()")
+                    if parse_price(t) is not None), None)
+        if was:
+            extra["list_price"] = str(parse_price(was))
+        condition = _CONDITION_RE.search(title)
+        if condition:
+            extra["condition"] = condition.group(1).lower()
+        rating = card.xpath(".//span[@class='a-icon-alt']/text()")
+        if rating:
+            extra["rating"] = rating[0].strip()
+        seen.add(asin)
+        results.append(StoreResult(
+            store="amazon", url=f"https://www.{storefront}/dp/{asin}",
+            title=title, price=price, currency=currency, in_stock=True,
+            sku=asin, method="http:amazon-search", extra=extra))
+        if len(results) >= limit:
+            break
+    return results
 
 
 class AmazonAdapter(StoreAdapter):
@@ -96,6 +195,13 @@ class AmazonAdapter(StoreAdapter):
         # pages in ~1s, no browser and no Keepa key needed.
         try:
             page = await fetcher.get(url)
+            # ASINs get retired constantly. A 404 is a settled answer, not a
+            # wall, so say so instead of paying for a browser that will only
+            # fetch the same "Page Not Found".
+            if page.status == 404:
+                return StoreResult(store=self.name, url=url, method="http:not-found",
+                                   error="no longer listed on Amazon (404) — the "
+                                         "ASIN was retired or the URL is wrong")
             if not page.looks_blocked:
                 parsed = self._parse(page.url, page.text, asin)
                 if parsed is not None:
@@ -123,6 +229,38 @@ class AmazonAdapter(StoreAdapter):
                                error="no price element found (page may be a variant/redirect)")
         parsed.method = "browser:amazon-dom"
         return parsed
+
+    async def search(self, query: str, limit: int = 5) -> list[StoreResult]:
+        """Keyless search over the public results page.
+
+        Amazon publishes no free product API — Keepa answers by ASIN, not by
+        keyword — so without this the store could only ever be *read* from a
+        URL the user already had, never *found* from a description. The results
+        page is server-rendered HTML that a fingerprinted GET returns in about
+        a second, which makes the whole catalogue searchable with no key.
+        """
+        host = self.storefront() or self.domains[0]
+        url = f"https://www.{host}/s?k={quote_plus(query)}"
+        try:
+            page = await fetcher.get(url)
+        except Exception:                              # noqa: BLE001 — network
+            return []
+        if page.status != 200 or page.looks_blocked:
+            return []
+        found = parse_amazon_search(page.text, storefront=host,
+                                    currency=self._currency_for(url, page.text))
+        # Amazon orders the page by its own interests: the first cards are paid
+        # placements and loose category matches. Rank against the query before
+        # truncating, or a limit of 3 returns three ads and drops the product
+        # that was actually asked for.
+        ranked = matching.rank(query, found, key=lambda r: r.title, threshold=0.0)
+        # Unless the user is shopping for an accessory themselves, in which case
+        # the same shape of title is exactly what they asked for.
+        if not _ACCESSORY_RE.search(query) and not re.search(r"\bfor\b", query, re.I):
+            tokens = set(matching.normalise(query).split())
+            # Stable, so relevance order survives inside each group.
+            ranked.sort(key=lambda r: _looks_like_accessory(r.title or "", tokens))
+        return ranked[:limit]
 
 
 class WalmartAdapter(StoreAdapter):
