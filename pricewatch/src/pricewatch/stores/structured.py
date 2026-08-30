@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from ..extract import extract
 from ..fetch import Blocked, fetcher
+from ..money import currency_for_host
 from ..settings import settings
 from .base import StoreAdapter, StoreResult, host_of
 
@@ -38,13 +39,17 @@ class StructuredAdapter(StoreAdapter):
         except Exception as exc:
             return StoreResult(store=store, url=url, error=f"fetch failed: {exc}")
 
-        found = extract(page.text, default_currency=settings.pw_currency)
+        # A storefront that prints a bare number is quoting its own market's
+        # money, not ours — fall back to the domain's currency before the
+        # global default.
+        fallback = currency_for_host(host_of(page.url), settings.pw_currency)
+        found = extract(page.text, default_currency=fallback)
         if not found.ok:
             # One escalation: the price may only exist after JS runs.
             if page.method == "http" and settings.pw_browser_enabled:
                 try:
                     page = await fetcher.render(url, wait_for=self.wait_for)
-                    found = extract(page.text, default_currency=settings.pw_currency)
+                    found = extract(page.text, default_currency=fallback)
                 except Exception:
                     pass
         if not found.ok:
@@ -56,7 +61,7 @@ class StructuredAdapter(StoreAdapter):
             url=page.url,
             title=found.title,
             price=found.price,
-            currency=found.currency or settings.pw_currency,
+            currency=found.currency or fallback,
             in_stock=found.in_stock,
             sku=found.sku,
             method=f"{page.method}:{found.method}",

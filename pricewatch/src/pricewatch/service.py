@@ -9,7 +9,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import matching
+from . import matching, preferences
 from .db import in_db, session_scope
 from .models import AlertEvent, Offer, PricePoint, Product, Tracker, utcnow
 from .money import fmt
@@ -507,12 +507,20 @@ async def compare(query: str, stores: list[str] | None = None, limit_per_store: 
     """One-shot price comparison — no tracking, just what it costs right now."""
     ranked, _, query_used = await _search_ranked(
         query, stores=stores, limit_per_store=limit_per_store, threshold=threshold)
+    preferred = preferences.preferred_currency()
     out = {"query": query, "search_terms_used": query_used, "count": len(ranked),
            "results": [r.as_dict() for r in ranked],
            "stores_searched": stores or sorted(ADAPTERS)}
     currencies = {r.currency for r in ranked if r.currency}
+    if preferred:
+        out["preferred_currency"] = preferred
+        out["results_in_preferred_currency"] = sum(
+            1 for r in ranked if (r.currency or "").upper() == preferred)
     if len(currencies) > 1:
-        out["note"] = (f"results span {', '.join(sorted(currencies))}; ordering "
-                       "uses an indicative conversion — always quote each price "
-                       "in its own currency")
+        note = (f"results span {', '.join(sorted(currencies))}; ordering uses an "
+                "indicative conversion — always quote each price in its own currency")
+        if preferred:
+            note += (f". Lead with the {preferred} listings and say plainly when a "
+                     f"store bills in something else")
+        out["note"] = note
     return out

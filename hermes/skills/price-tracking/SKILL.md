@@ -2,7 +2,7 @@
 name: price-tracking
 description: Research prices across tech and 3D-printing retailers, check Reddit deal chatter, and set up price-drop alerts and scheduled checks. Use whenever the user asks what something costs, where it is cheapest, whether a deal is good, mentions a price seen on Reddit, or asks to be told when a price falls.
 metadata:
-  version: 1.1.0
+  version: 1.2.0
 ---
 
 # Price research and tracking
@@ -25,6 +25,8 @@ returns, with the store name and URL beside every figure.
 | "Reddit says people get these for $50" | `community_pulse`, then `read_reddit_thread` |
 | "Check my prices more/less often" | `set_sweep_schedule` |
 | "Did any alert actually fire?" | `list_alert_events` |
+| "Quote me in CAD from now on" | `set_preferred_currency` |
+| "What currency am I set to?" | `get_preferred_currency` |
 
 ## Identifying the product precisely
 
@@ -49,6 +51,32 @@ its product pages cannot be re-read, so those listings cannot be tracked —
 `track_product_description` will say so and list the matches. Offer to track
 the same product at a supported store, and quote the AliExpress price as a
 point-in-time comparison.
+
+## Currency and region
+
+The user has a currency they want to be answered in (`PW_PREFERRED_CURRENCY`,
+changeable at any time with `set_preferred_currency`). The MCP server states it
+in its instructions; `get_preferred_currency` reports it if you are unsure.
+When one is set:
+
+- **Lead with the stores that bill in it**, and link their regional storefront —
+  amazon.ca rather than amazon.com for a Canadian shopper. The engine already
+  searches the regional site where a store runs one, so those results come back
+  natively in the right currency.
+- **Never convert a price yourself.** Quote each store's real figure in the
+  currency that store charges, and name the currency whenever it is not the
+  user's.
+- Results that come from a foreign-currency store carry an
+  `approx_in_preferred` field. It is an *indicative* rate, not a rate of the
+  day: show it as an approximation beside the real price ("$99 USD ≈ CA$136"),
+  never in place of it, and never use it as an alert threshold.
+- `compare_prices` reports `preferred_currency` and
+  `results_in_preferred_currency`. If that count is zero, say so — "nothing in
+  this comparison is priced in CAD" is useful information, not a failure.
+
+Target prices are taken in the currency of the listing being watched, so when
+the user names a number, confirm which currency they mean if the cheapest
+listing is foreign.
 
 ## Setting up an alert
 
@@ -153,8 +181,8 @@ rather than guessing or hand-fetching.
 - If a store returns `NEEDS-KEY` or an error, say which store failed and why
   instead of quietly dropping it from the comparison. `engine_status` explains
   what is configured.
-- Prices come from different stores in different currencies; state the currency
-  when it is not USD.
+- Prices come from different stores in different currencies; always state the
+  currency when it is not the user's preferred one (see "Currency and region").
 
 ## Honesty rules
 

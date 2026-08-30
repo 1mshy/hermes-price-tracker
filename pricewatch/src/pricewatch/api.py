@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import community, service
+from . import community, preferences, service
 from . import scheduler as sweep_scheduler
 from .notify import Alert, channel_status, dispatch
 from .stores.registry import catalog_summary, fetch_offer
@@ -157,6 +157,24 @@ async def set_schedule(body: ScheduleIn) -> dict:
     try:
         return {"ok": True, **sweep_scheduler.reschedule(body.cron)}
     except sweep_scheduler.ScheduleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+class LocaleIn(BaseModel):
+    currency: str
+    region: str = ""
+
+
+@router.get("/locale")
+async def locale_preference() -> dict:
+    return preferences.current()
+
+
+@router.patch("/locale")
+async def set_locale(body: LocaleIn) -> dict:
+    try:
+        return {"ok": True, **preferences.set_preference(body.currency, body.region)}
+    except preferences.LocaleError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
 

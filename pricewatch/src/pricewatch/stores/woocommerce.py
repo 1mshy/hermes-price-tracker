@@ -70,7 +70,7 @@ class WooAdapter(StoreAdapter):
     async def search(self, query: str, limit: int = 5) -> list[StoreResult]:
         if not self.domains:
             return []
-        root = f"https://{self.domains[0]}"
+        root = f"https://{self.storefront()}"
         endpoint = f"{root}/wp-json/wc/store/v1/products?search={quote(query)}&per_page={limit}"
         try:
             data = await fetcher.get_json(endpoint)

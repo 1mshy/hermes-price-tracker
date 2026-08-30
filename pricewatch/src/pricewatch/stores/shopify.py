@@ -14,7 +14,8 @@ import re
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from ..fetch import fetcher
-from ..money import cents_to_decimal, parse_price
+from ..money import cents_to_decimal, currency_for_host, parse_price
+from ..settings import settings
 from .base import StoreAdapter, StoreResult, host_of
 
 _HANDLE_RE = re.compile(r"/products/([^/?#]+)")
@@ -82,7 +83,10 @@ class ShopifyAdapter(StoreAdapter):
             url=url,
             title=data.get("title"),
             price=price,
-            currency="USD",
+            # /products/<handle>.js reports cents and no currency at all, so the
+            # storefront's own domain is the only signal: ca.store.bambulab.com
+            # bills CAD. Assuming USD is how a Canadian store gets misquoted.
+            currency=currency_for_host(host_of(url), settings.pw_currency),
             in_stock=bool((variant or {}).get("available", data.get("available", False))),
             sku=(variant or {}).get("sku") or str(data.get("id") or "") or None,
             method="shopify-json",
@@ -95,7 +99,9 @@ class ShopifyAdapter(StoreAdapter):
     async def search(self, query: str, limit: int = 5) -> list[StoreResult]:
         if not self.domains:
             return []
-        root = f"https://{self.domains[0]}"
+        domain = self.storefront()
+        currency = currency_for_host(domain, settings.pw_currency)
+        root = f"https://{domain}"
         endpoint = (
             f"{root}/search/suggest.json?q={quote(query)}"
             f"&resources[type]=product&resources[limit]={min(limit, 10)}"
@@ -116,7 +122,7 @@ class ShopifyAdapter(StoreAdapter):
                     url=url,
                     title=item.get("title"),
                     price=_suggest_price(item.get("price")),
-                    currency="USD",
+                    currency=currency,
                     in_stock=item.get("available"),
                     method="shopify-suggest",
                 )

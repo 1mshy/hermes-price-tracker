@@ -115,9 +115,10 @@ genuinely JS-rendered pages only.
 **Marketplaces** — eBay now reads keylessly (fingerprinted HTTP + JSON-LD on
 item pages, HTML parsing for search); `EBAY_APP_ID` + `EBAY_CERT_ID` remain the
 most reliable path. AliExpress is **search-only**: `compare_prices` returns live
-USD prices from its search page (often the cheapest source — OEMs like SUNLU
-sell direct), but product pages block automated reads, so AliExpress listings
-cannot be tracked and the tools say so instead of failing silently.
+prices from its search page (often the cheapest source — OEMs like SUNLU sell
+direct), in whichever currency `PW_PREFERRED_CURRENCY` pins the locale to, but
+product pages block automated reads, so AliExpress listings cannot be tracked
+and the tools say so instead of failing silently.
 
 **Needs a free API key** — Best Buy (`BESTBUY_API_KEY`) requires its key.
 `KEEPA_API_KEY` makes Amazon bulletproof but is no longer required for everyday
@@ -160,6 +161,43 @@ subsequent reads start there. Requests are rate-limited per hostname
 (`PW_PER_HOST_RPS`, default 0.4/s) with jitter. Unknown domains are sniffed
 automatically — paste a link to any Shopify or WooCommerce store and it will
 usually just work.
+
+## Currency and region
+
+Set the currency you want to be quoted in, and the market you buy from:
+
+```bash
+PW_PREFERRED_CURRENCY=CAD    # ISO code: CAD, EUR, GBP, AUD, JPY, CHF, SEK, PLN, CZK, USD
+PW_REGION=CA                 # ISO country; blank derives it from the currency
+```
+
+Or set it in conversation — "quote me in CAD from now on" — which the agent
+applies through `set_preferred_currency` (`PATCH /api/locale`). A runtime change
+is stored in the settings table and survives restarts, exactly like the sweep
+schedule.
+
+What a preference actually changes:
+
+- **Search goes to your storefront.** Where a store runs a regional site the
+  engine searches that one — `ca.store.bambulab.com` instead of
+  `us.store.bambulab.com` — so the prices come back natively in your currency
+  rather than needing conversion. AliExpress's locale cookie is pinned to the
+  same market, so its search returns CAD directly.
+- **Shopify stores report the right money.** Shopify's product JSON gives cents
+  and no currency at all; the engine reads the storefront's domain
+  (`ca.…` → CAD) rather than assuming USD.
+- **Foreign listings are labelled, not converted.** A store that bills in
+  another currency keeps its own figure. Beside it the result carries
+  `approx_in_preferred` — an indicative conversion the agent is instructed to
+  show as an approximation (`$99 USD ≈ CA$136`), never as the price, and never
+  as an alert threshold.
+- **The agent is told.** The preference is part of the MCP server's
+  instructions, so it applies whether or not the price-tracking skill has
+  loaded; `get_preferred_currency` and `engine_status` report the live value.
+
+Ordering across mixed currencies already used an indicative rate so a CA$96
+listing does not outrank a US$99 one. That has not changed — the rates are
+static and for ranking and orientation only, never for quoting.
 
 ## Alerts
 
@@ -279,6 +317,9 @@ curl "localhost:8077/api/community?query=sunlu+ams+heater"
 curl localhost:8077/api/schedule
 curl -XPATCH localhost:8077/api/schedule -H 'Content-Type: application/json' \
      -d '{"cron":"*/15 * * * *"}'
+curl localhost:8077/api/locale
+curl -XPATCH localhost:8077/api/locale -H 'Content-Type: application/json' \
+     -d '{"currency":"CAD"}'
 ```
 
 Interactive docs at `localhost:8077/docs`.
@@ -330,7 +371,13 @@ Add one row to `pricewatch/src/pricewatch/stores/catalog.py`:
 ## Notes and caveats
 
 - **Prices are geo-dependent.** Prusa and Bambu Lab redirect by IP; a run from
-  Canada returns CAD. The currency is always reported alongside the price.
+  Canada returns CAD. The currency is always reported alongside the price, and
+  `PW_PREFERRED_CURRENCY` steers the engine at the storefront you actually buy
+  from rather than leaving it to whatever IP the container has.
+- **Conversions are indicative, never quoted.** The rates in `money.py` are
+  static, hand-maintained approximations used for ranking mixed-currency results
+  and for the `approx_in_preferred` hint. They are not a rate of the day; no
+  tool ever reports a converted number as a store's price.
 - **Scraping is best-effort.** Retailers change markup without warning. The
   verification harness is the tool for catching that — run it periodically.
 - Respect the retailers: the default sweep is every 30 minutes with per-host rate

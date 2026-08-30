@@ -27,7 +27,7 @@ CATALOG: list[dict] = [
     {"key": "ebay",         "label": "eBay",              "kind": "api",        "tags": [TECH, PRINT3D], "domains": ("ebay.com",),
      "note": "Reads keylessly via fingerprinted HTTP + JSON-LD (items) and HTML search; EBAY_APP_ID + EBAY_CERT_ID (free at developer.ebay.com) remain the most reliable path."},
     {"key": "aliexpress",   "label": "AliExpress",        "kind": "api",        "tags": [TECH, PRINT3D], "domains": ("aliexpress.com", "aliexpress.us"),
-     "note": "Search-only marketplace: prices come from the search page (USD via locale cookie); product pages block automated reads, so listings cannot be tracked."},
+     "note": "Search-only marketplace: prices come from the search page, in the currency PW_PREFERRED_CURRENCY pins the locale cookie to (USD by default); product pages block automated reads, so listings cannot be tracked."},
     {"key": "newegg",       "label": "Newegg",            "kind": "selector",   "tags": [TECH],          "domains": ("newegg.com",),
      "probe": "https://www.newegg.com/Creality-K2-Pro-Combo/p/N82E16828285069"},
     {"key": "microcenter",  "label": "Micro Center",      "kind": "browser",    "tags": [TECH, PRINT3D], "domains": ("microcenter.com",),

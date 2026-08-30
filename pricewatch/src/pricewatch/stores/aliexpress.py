@@ -1,8 +1,8 @@
 """AliExpress — search-only adapter.
 
 Product pages serve a JS shell to automated clients from this host (~77 KB, no
-price), but the *search* page returns full embedded JSON — including USD sale
-prices once the locale cookie pins the site to US/USD. So this adapter powers
+price), but the *search* page returns full embedded JSON — including sale
+prices once the locale cookie pins the site to a market. So this adapter powers
 compare_prices with live marketplace prices and clearly refuses tracking: a
 watch needs fetch_offer to work on every sweep, and AliExpress blocks that.
 
@@ -16,15 +16,26 @@ import logging
 import re
 from urllib.parse import quote_plus
 
+from .. import preferences
 from ..fetch import fetcher
 from ..money import parse_price
 from .base import StoreAdapter, StoreResult
 
 log = logging.getLogger(__name__)
 
-#: Pins the storefront to US/USD; without it prices come back geo-localised.
-_LOCALE_COOKIE = ("aep_usuc_f=site=glo&c_tp=USD&region=US&b_locale=en_US; "
-                  "intl_locale=en_US")
+
+def _locale_cookie() -> str:
+    """Pin the storefront to the shopper's market.
+
+    Without this, prices come back localised to wherever the engine happens to
+    run — which is precisely how a Canadian user ends up reading USD. With a
+    preference set, AliExpress quotes that currency itself, so the figure in
+    the response is genuine rather than converted.
+    """
+    currency = preferences.preferred_currency() or "USD"
+    region = preferences.preferred_region() or "US"
+    return (f"aep_usuc_f=site=glo&c_tp={currency}&region={region}&b_locale=en_US; "
+            "intl_locale=en_US")
 
 _BLOCK_RE = re.compile(r'"productId":"(\d+)"')
 _TITLE_RE = re.compile(r'"displayTitle":"((?:[^"\\]|\\.)*)"')
@@ -108,7 +119,7 @@ class AliExpressAdapter(StoreAdapter):
         url = (f"https://www.aliexpress.com/w/wholesale-{slug}.html"
                f"?SearchText={quote_plus(query)}")
         try:
-            page = await fetcher.get(url, headers={"Cookie": _LOCALE_COOKIE})
+            page = await fetcher.get(url, headers={"Cookie": _locale_cookie()})
         except Exception as exc:                       # noqa: BLE001 — network
             log.debug("aliexpress search failed: %s", exc)
             return []

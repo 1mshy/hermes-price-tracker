@@ -100,6 +100,81 @@ def usd_sort_key(price: Decimal | None, currency: str | None) -> Decimal:
     return price * rate
 
 
+def convert(amount: Decimal | float | None, frm: str | None, to: str | None) -> Decimal | None:
+    """Indicative cross-currency value — for orientation, never for quoting.
+
+    Same static rates as the sort key, so a Canadian shopper can see roughly
+    what a USD listing costs them without the engine ever passing the
+    converted number off as a real price. None when either side is unknown.
+    """
+    if amount is None:
+        return None
+    frm, to = (frm or "USD").upper(), (to or "USD").upper()
+    if frm == to:
+        return Decimal(amount)
+    rate_from, rate_to = _INDICATIVE_USD_RATE.get(frm), _INDICATIVE_USD_RATE.get(to)
+    if rate_from is None or rate_to is None:
+        return None
+    return (Decimal(amount) * rate_from / rate_to).quantize(Decimal("0.01"))
+
+
+# ─────────────────────────── region ↔ currency ───────────────────────────
+# Which storefront a currency belongs to, and back again. Used to pick the
+# regional storefront a shopper actually buys from (ca.store.bambulab.com over
+# us.store.bambulab.com) and to guess what a shop bills in when its API reports
+# a bare number — Shopify's product JSON is the big offender there.
+REGION_CURRENCY: dict[str, str] = {
+    "US": "USD", "CA": "CAD", "GB": "GBP", "AU": "AUD", "JP": "JPY",
+    "CH": "CHF", "SE": "SEK", "PL": "PLN", "CZ": "CZK",
+    "EU": "EUR", "DE": "EUR", "FR": "EUR", "IT": "EUR", "ES": "EUR",
+    "NL": "EUR", "IE": "EUR", "BE": "EUR", "AT": "EUR",
+}
+#: One canonical region per currency, for the reverse lookup.
+_CURRENCY_REGION = {"USD": "US", "CAD": "CA", "GBP": "GB", "EUR": "EU", "AUD": "AU",
+                    "JPY": "JP", "CHF": "CH", "SEK": "SE", "PLN": "PL", "CZK": "CZ"}
+
+#: Regional storefronts announce themselves in the sub-domain (ca.store.…) …
+_SUBDOMAIN_REGION = {"us": "US", "ca": "CA", "eu": "EU", "uk": "GB", "gb": "GB",
+                     "de": "DE", "fr": "FR", "au": "AU", "jp": "JP"}
+#: … or in the TLD. Longest-first so ".co.uk" is not read as ".uk".
+_TLD_REGION = ((".co.uk", "GB"), (".co.jp", "JP"), (".com.au", "AU"),
+               (".ca", "CA"), (".de", "DE"), (".fr", "FR"), (".it", "IT"),
+               (".es", "ES"), (".nl", "NL"), (".eu", "EU"), (".ch", "CH"),
+               (".se", "SE"), (".pl", "PL"), (".cz", "CZ"), (".jp", "JP"),
+               (".au", "AU"), (".uk", "GB"), (".us", "US"), (".com", "US"))
+
+
+def currency_for_region(region: str | None, default: str = "") -> str:
+    return REGION_CURRENCY.get((region or "").strip().upper(), default)
+
+
+def region_for_currency(currency: str | None, default: str = "") -> str:
+    return _CURRENCY_REGION.get((currency or "").strip().upper(), default)
+
+
+def region_for_host(host: str | None, default: str = "") -> str:
+    """Which market a storefront hostname serves: ca.store.bambulab.com → CA."""
+    host = (host or "").strip().lower().removeprefix("www.")
+    if not host:
+        return default
+    label = host.split(".")[0]
+    if label in _SUBDOMAIN_REGION and "." in host:
+        return _SUBDOMAIN_REGION[label]
+    for suffix, region in _TLD_REGION:
+        if host.endswith(suffix):
+            return region
+    return default
+
+
+def currency_for_host(host: str | None, default: str = "USD") -> str:
+    """Best guess at what a storefront bills in, from its hostname alone.
+
+    Only a guess, and only worth using where the store publishes no currency
+    at all: anything that reports one should be believed instead.
+    """
+    return currency_for_region(region_for_host(host), default)
+
+
 def fmt(amount: Decimal | float | None, currency: str = "USD") -> str:
     if amount is None:
         return "n/a"

@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from . import scheduler
+from . import preferences, scheduler
 from .api import router
 from .db import init_db
 from .fetch import fetcher
@@ -25,9 +25,14 @@ mcp_app = build_mcp_app()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # The currency preference was first read while building the MCP blurb above,
+    # possibly before the settings table existed. Re-read it now the schema is
+    # there, so a saved override is live from the first request.
+    preferences.reload()
     async with mcp.session_manager.run():
         scheduler.start()
-        log.info("pricewatch ready — REST on /api, MCP on /mcp")
+        log.info("pricewatch ready — REST on /api, MCP on /mcp (currency: %s)",
+                 preferences.preferred_currency() or "as each store bills")
         try:
             yield
         finally:

@@ -10,7 +10,7 @@ import logging
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
-from . import community, service
+from . import community, preferences, service
 from . import scheduler as sweep_scheduler
 from .notify import Alert, channel_status, dispatch
 from .stores.registry import catalog_summary, fetch_offer
@@ -18,17 +18,41 @@ from .settings import settings
 
 log = logging.getLogger(__name__)
 
-mcp = MCPServer(
-    "hermes-shopping",
-    instructions=(
-        "Price research and tracking across major tech and 3D-printing retailers. "
-        "Use compare_prices for a one-off 'what does this cost' question. Use "
-        "track_product_url or track_product_description to set up an ongoing watch "
-        "that notifies the user on Discord/Signal/WhatsApp when a price target is hit. "
-        "Prices are read from official store APIs and structured product data, so "
-        "always report the store and URL alongside any figure you quote."
-    ),
+_BASE_INSTRUCTIONS = (
+    "Price research and tracking across major tech and 3D-printing retailers. "
+    "Use compare_prices for a one-off 'what does this cost' question. Use "
+    "track_product_url or track_product_description to set up an ongoing watch "
+    "that notifies the user on Discord/Signal/WhatsApp when a price target is hit. "
+    "Prices are read from official store APIs and structured product data, so "
+    "always report the store and URL alongside any figure you quote."
 )
+
+
+def _instructions() -> str:
+    """The server blurb, extended with the user's currency when they set one.
+
+    This is the one piece of guidance the agent sees on every connection, so
+    the currency rule belongs here rather than only in a skill that may not
+    have loaded.
+    """
+    currency = preferences.preferred_currency()
+    if not currency:
+        return _BASE_INSTRUCTIONS
+    region = preferences.preferred_region()
+    return _BASE_INSTRUCTIONS + (
+        f" This user shops in {currency}"
+        + (f" ({region})" if region else "")
+        + f". Answer in {currency}: lead with the stores that bill in {currency} and "
+        f"link their regional storefront. Never convert a price yourself and never "
+        f"present a foreign figure as {currency} — quote each store's real price in "
+        f"its own currency and name that currency. Where a result carries an "
+        f"`approx_in_preferred` field it is an indicative rate for comparison only, "
+        f"so show it as an approximation (≈) beside the real price, never instead of "
+        f"it. Call set_preferred_currency if the user asks to be quoted differently."
+    )
+
+
+mcp = MCPServer("hermes-shopping", instructions=_instructions())
 
 
 @mcp.tool(
@@ -204,6 +228,34 @@ async def check_notifications(send_test: bool = False) -> dict:
 
 @mcp.tool(
     description=(
+        "Report which currency the user wants to be quoted in and which country's storefronts "
+        "the engine reaches for. Call it when you are unsure what currency to answer in, or "
+        "before quoting a comparison that spans several currencies."
+    )
+)
+async def get_preferred_currency() -> dict:
+    return preferences.current()
+
+
+@mcp.tool(
+    description=(
+        "Set the currency the user wants every price answered in (ISO code, e.g. 'CAD'), and "
+        "optionally the country whose storefronts to prefer (ISO code, e.g. 'CA' — defaults to "
+        "the currency's home market). The engine then searches regional storefronts that bill "
+        "in that currency, and annotates any foreign-currency result with an indicative "
+        "conversion. It never rewrites a store's actual price. Pass 'default' to clear the "
+        "preference. Takes effect immediately and survives restarts."
+    )
+)
+async def set_preferred_currency(currency: str, region: str = "") -> dict:
+    try:
+        return {"ok": True, **preferences.set_preference(currency, region)}
+    except preferences.LocaleError as exc:
+        return {"ok": False, "error": str(exc), **preferences.current()}
+
+
+@mcp.tool(
+    description=(
         "Report how the price engine is configured: scan schedule, browser fallback, and which "
         "optional retailer API keys are present. Use it to explain why a particular store might "
         "not be returning prices."
@@ -215,6 +267,7 @@ async def engine_status() -> dict:
     return {
         "sweep_schedule": schedule,
         "check_schedule_cron": schedule["cron"],
+        "locale": preferences.current(),
         "http_fingerprint": (settings.pw_impersonate if _CffiSession is not None else "unavailable"),
         "browser_fallback_enabled": settings.pw_browser_enabled,
         "residential_proxy_configured": bool(settings.pw_http_proxy),

@@ -9,7 +9,20 @@ class Settings(BaseSettings):
 
     # storage
     pw_db_url: str = "sqlite:////data/pricewatch.db"
+    #: Last-resort currency for a page that prints a bare number and says
+    #: nothing about which money it is. Not the user's preference — that is
+    #: pw_preferred_currency below.
     pw_currency: str = "USD"
+
+    # locale — what the user wants quoted, and which storefronts they buy from.
+    # Prices are never silently converted: a preference makes the engine reach
+    # for the storefront that natively bills in this currency, and label
+    # everything else as foreign. Blank = no preference (US/USD-leaning).
+    pw_preferred_currency: str = ""
+    #: ISO-3166 country picking regional storefronts (amazon.ca,
+    #: ca.store.bambulab.com, AliExpress's locale cookie). Blank → derived from
+    #: pw_preferred_currency.
+    pw_region: str = ""
 
     # fetching
     pw_user_agent: str = (
