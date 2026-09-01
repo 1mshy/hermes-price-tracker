@@ -72,6 +72,22 @@ class Settings(BaseSettings):
     callmebot_phone: str = ""
     callmebot_apikey: str = ""
 
+    # ── car-search analyst ───────────────────────────────────────────────
+    # An OpenAI-compatible chat endpoint used to read a free-text car request
+    # and to write the narrative half of a car report. Defaults to the same
+    # model the agent itself runs on (LLM_BASE_URL / LLM_MODEL in .env), so a
+    # self-hosted deployment needs no extra configuration. Every use degrades
+    # to a deterministic fallback when the endpoint is absent or slow: the
+    # numbers in a car report never come from the model.
+    llm_base_url: str = ""
+    llm_model: str = ""
+    llm_api_key: str = ""
+    pw_analyst_enabled: bool = True
+    #: Self-hosted 27B endpoints run around 5-6 tokens/s, and a reasoning
+    #: model spends most of a completion thinking, so a request that returns
+    #: 500 tokens can take 90s. Sized for that rather than for a hosted API.
+    pw_analyst_timeout: float = 300.0
+
     # optional retail APIs
     bestbuy_api_key: str = ""
     ebay_app_id: str = ""

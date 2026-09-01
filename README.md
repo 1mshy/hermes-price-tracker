@@ -260,6 +260,87 @@ Both are also on the REST API (`GET /api/community?query=…`,
 design — the tools say so in their output, and the skill tells the agent to
 confirm with `get_price` before quoting one.
 
+## Used-car search (the swarm)
+
+Cars are not products. There is no catalogue, no SKU to match on, and the same
+car is cross-posted to four sites at three prices; "cheapest" is close to
+meaningless when the cheap one is the one with 99,000 km on it. So this is a
+separate engine from the price tracker, with its own sources and its own idea
+of what an answer looks like.
+
+```
+   "all the 2022 audi a3s in laval, quebec"
+                  │
+        ┌─────────┴──────────┐   five scouts, in parallel
+        ▼                    ▼
+  AutoTrader.ca  Kijiji  Carpages  Marketplace  Copart
+        └─────────┬──────────┘
+                  ▼
+     place · filter · deduplicate · fit the local price curve
+                  ▼
+       report  ◄── analyst agents (your own model)
+```
+
+Ask the agent directly:
+
+> *"What 2022 Audi A3s are for sale near Laval?"*
+> *"Find me a manual Golf GTI around Montreal under $20k with less than 120,000 km."*
+
+**Sources.** `autotrader` and `carpages` are dealer inventory read from the
+schema.org JSON-LD both publish. `kijiji` is the richest — its Apollo cache
+carries VIN, trim, odometer, seller type, coordinates and Kijiji's own price
+rating. `facebook` is Marketplace, recovered from the GraphQL payload the page
+ships inline, and is where the private sellers are. `copart` is the salvage
+auction, included because it is the floor under every asking price in the
+report — its lots are marked `salvage`/`auction` and never mixed into the
+retail statistics.
+
+**Nothing is trusted to filter itself.** A Laval search on AutoTrader returns
+Winnipeg cars; Kijiji hands back a Q3 when you asked for an A3; Copart matches
+on the make alone. So every listing is re-placed on the map (cities are
+geocoded and cached) and re-checked against the query locally. In a typical run
+167 of the 182 listings read are discarded, and the report says so.
+
+**Cross-postings are merged.** One car on AutoTrader, Kijiji and Marketplace is
+one car, or the market looks three times bigger than it is. Records are joined
+on VIN where a source publishes one and on year/model/price/odometer where none
+does, with an ambiguity check that leaves two same-priced cars apart rather than
+guessing. Every merged record keeps the other URLs.
+
+**"Best price" is the wrong question, so it is not the answer.** The engine fits
+asking price against odometer across the cars actually for sale near you, which
+gives an expected price at any mileage and turns "is this a deal" into a number.
+It then reports the **Pareto frontier** — the cars nothing else beats on both
+price *and* kilometres. Everything else is strictly worse than one of those on
+both counts, so no preference between money and mileage could pick it.
+
+**Your model writes, it does not count.** Prices, distances and deal scores all
+come from the arithmetic; the model reads the request, reads what the sellers
+wrote (most of this market advertises in French), and writes the prose. Point it
+at any OpenAI-compatible endpoint — it defaults to the same `LLM_BASE_URL` /
+`LLM_MODEL` the agent already uses, and the whole report degrades to the
+deterministic version when the endpoint is absent or slow.
+
+```bash
+curl -XPOST localhost:8077/api/cars/search -H 'Content-Type: application/json' \
+     -d '{"make":"Audi","model":"A3","location":"Laval, Quebec","year":2022}'
+curl -XPOST localhost:8077/api/cars/search -H 'Content-Type: application/json' \
+     -d '{"text":"2019-2022 Honda Civic near Toronto under $25,000","deep":true}'
+curl localhost:8077/api/cars/sources
+```
+
+`deep=true` adds the reader agents that summarise each seller's own claims and
+warnings; it is slower and off by default.
+
+**What it does not do.** It does not crawl individual dealership websites. The
+Quebec dealer platforms render their inventory client-side and publish no
+vehicle JSON-LD, no per-car URL and no VIN — while those same cars are on
+AutoTrader and Kijiji *with* all three. So the dealer view is built from the
+aggregator records instead, and every figure in it has a live listing behind it.
+Facebook Marketplace is read logged-out, which returns roughly the first screen
+of results and no pagination: treat it as a sample of the private market, not a
+census.
+
 ## Scheduled agent jobs (hermes cron)
 
 Price watches don't need cron — trackers re-check themselves on the sweep

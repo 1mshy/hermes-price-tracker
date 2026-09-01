@@ -340,6 +340,71 @@ async def list_alert_events(limit: int = 30) -> dict:
     return await service.list_alerts(limit=limit)
 
 
+@mcp.tool(
+    description=(
+        "Search for a used car across every major Canadian listing site at once and return "
+        "a full market report. Covers AutoTrader.ca, Kijiji Autos, Carpages, Facebook "
+        "Marketplace and the Copart salvage auction in parallel, then deduplicates cars "
+        "that are cross-posted, filters to the year/model/radius asked for, fits a local "
+        "price-vs-kilometres curve, and works out which listings are genuinely good value "
+        "rather than merely cheap.\n"
+        "Give make, model and location (e.g. make='Audi', model='A3', "
+        "location='Laval, Quebec'). Set year for one model year, or year_min/year_max for "
+        "a range. radius_km defaults to 150. Use max_mileage_km or price_max to narrow.\n"
+        "Returns a ready-to-show markdown report in `report_markdown` — prefer showing "
+        "that over re-describing the raw listings — plus the structured listings, the "
+        "market statistics, and a per-source coverage list saying which sites answered. "
+        "Always pass on the coverage caveat when a source failed: the report is only as "
+        "complete as the sites that responded.\n"
+        "Set deep=true to also have reader agents summarise what each seller wrote "
+        "(equipment, condition claims, warnings) — slower, but useful before recommending "
+        "a specific car."
+    )
+)
+async def search_cars(make: str, model: str, location: str, year: int | None = None,
+                      year_min: int | None = None, year_max: int | None = None,
+                      radius_km: float = 150.0, price_max: float | None = None,
+                      max_mileage_km: int | None = None,
+                      include_auctions: bool = True, include_salvage: bool = False,
+                      sources: list[str] | None = None, deep: bool = False) -> dict:
+    from . import cars
+    query = await cars.spec.build(
+        make=make, model=model, location=location, year=year,
+        year_min=year_min, year_max=year_max, radius_km=radius_km,
+        price_max=price_max, max_mileage_km=max_mileage_km,
+        include_auctions=include_auctions, include_salvage=include_salvage)
+    return await cars.research(query, sources=sources, deep=deep)
+
+
+@mcp.tool(
+    description=(
+        "Same multi-site car search, but from the user's own sentence when you are not "
+        "sure how to split it into fields — e.g. 'all the 2022 audi a3s in laval quebec' "
+        "or 'a manual Golf GTI near Montreal under $20k with less than 120,000 km'. "
+        "Parses the request first and reports what it understood in `query`; check that "
+        "back with the user if it looks wrong."
+    )
+)
+async def search_cars_from_text(request: str, deep: bool = False) -> dict:
+    from . import cars
+    return await cars.research_text(request, deep=deep)
+
+
+@mcp.tool(
+    description=(
+        "List the car listing sites the swarm searches, what kind of seller each one "
+        "carries (dealer retail, private, or salvage auction), and whether the analyst "
+        "model used for the written report is reachable. Use it to explain coverage."
+    )
+)
+async def list_car_sources() -> dict:
+    from .cars import analyst
+    from .cars.swarm import SOURCES
+    return {"sources": [{"key": s.key, "label": s.label, "channel": s.channel,
+                         "countries": list(s.countries)} for s in SOURCES],
+            "analyst": analyst.llm.describe()}
+
+
 def build_mcp_app():
     """Create the Streamable-HTTP ASGI app (also initialises the session manager).
 

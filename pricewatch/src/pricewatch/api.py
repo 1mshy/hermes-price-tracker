@@ -36,6 +36,25 @@ class CompareIn(BaseModel):
     limit_per_store: int = 3
 
 
+class CarSearchIn(BaseModel):
+    """Structured car search. Give make+model+location, or `text` alone."""
+    make: str = ""
+    model: str = ""
+    location: str = ""
+    text: str = ""
+    year: int | None = None
+    year_min: int | None = None
+    year_max: int | None = None
+    radius_km: float = 150.0
+    price_max: float | None = None
+    price_min: float | None = None
+    max_mileage_km: int | None = None
+    include_auctions: bool = True
+    include_salvage: bool = False
+    sources: list[str] | None = None
+    deep: bool = False
+
+
 class TrackerPatch(BaseModel):
     target_price: float | None = None
     drop_pct: float | None = None
@@ -187,3 +206,31 @@ async def refresh() -> dict:
 async def notify_test(message: str = "Hermes Shopping test alert") -> dict:
     outcome = await dispatch(Alert(title="✅ Hermes Shopping", body=message))
     return {"channels": channel_status(), "result": outcome or "no channel configured"}
+
+
+# ── used-car research ───────────────────────────────────────────────────
+@router.get("/cars/sources")
+async def car_sources() -> dict:
+    from .cars import analyst
+    from .cars.swarm import SOURCES
+    return {
+        "sources": [{"key": s.key, "label": s.label, "channel": s.channel,
+                     "countries": list(s.countries)} for s in SOURCES],
+        "analyst": analyst.llm.describe(),
+    }
+
+
+@router.post("/cars/search")
+async def car_search(body: CarSearchIn) -> dict:
+    from . import cars
+    if body.text and not (body.make and body.model):
+        return await cars.research_text(body.text, sources=body.sources, deep=body.deep)
+    if not (body.make and body.model):
+        raise HTTPException(422, "give make and model, or a free-text `text` query")
+    query = await cars.spec.build(
+        make=body.make, model=body.model, location=body.location,
+        year=body.year, year_min=body.year_min, year_max=body.year_max,
+        radius_km=body.radius_km, price_max=body.price_max, price_min=body.price_min,
+        max_mileage_km=body.max_mileage_km, include_auctions=body.include_auctions,
+        include_salvage=body.include_salvage)
+    return await cars.research(query, sources=body.sources, deep=body.deep)
