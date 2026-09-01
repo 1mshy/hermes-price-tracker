@@ -348,6 +348,26 @@ store** at run time (Shopify catalog → sitemap → homepage scrape) rather tha
 trusting hardcoded links, and reports `OK` / `BLOCKED` / `NEEDS-KEY` / `FAIL`
 separately so a bot-wall is never confused with a broken parser.
 
+## Rebuilding after a change
+
+Source is baked into the images (`COPY src` + `pip install .`), so `docker
+compose restart` keeps running the *old* code — a stale pricewatch image once
+went unnoticed for days. `scripts/rebuild.sh` is the safe path: it runs the
+offline suite, rebuilds, waits for the healthcheck, then **diffs the installed
+package against your working tree** and fails loudly if they differ.
+
+```bash
+./scripts/rebuild.sh                 # pricewatch (the usual case)
+./scripts/rebuild.sh agent           # dashboard + gateway (hermes/ changes)
+./scripts/rebuild.sh all             # everything
+./scripts/rebuild.sh --smoke         # also run scripts/agent-smoke.sh
+```
+
+`dashboard` and `gateway` are the same image, so the script always recreates
+them as a pair — rebuilding one alone leaves the other on the image it started
+from. After a pricewatch rebuild it also recreates the dashboard, whose open
+session otherwise holds an MCP stream to the container that just went away.
+
 ## Running the tests
 
 The engine has an offline unit suite (price parsing, product matching, HTML
