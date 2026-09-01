@@ -1,25 +1,30 @@
-FROM python:3.12-slim
+# Upstream retired the PyPI path. `pip install hermes-agent` is now listed as
+# unsupported alongside Homebrew and the AUR — "may already be broken right now,
+# break more in future", fixes for it are not merged, and the dashboard nags
+# about it on every load. Docker is Tier 1, so instead of building our own image
+# around a pip install we layer this project's config onto the official one.
+# https://hermes-agent.nousresearch.com/docs/getting-started/platform-support
+#
+# Pin a date tag: `latest` moves near-daily, and a Docker install has no
+# `hermes update` — upgrading means bumping this line and rebuilding
+# (`./scripts/rebuild.sh agent`).
+FROM nousresearch/hermes-agent:v2026.8.31
 
-ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    HERMES_HOME=/root/.hermes
-
-# hermes-agent shells out to git/node for skills and MCP servers.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        git curl ca-certificates nodejs npm ripgrep \
-    && rm -rf /var/lib/apt/lists/*
-
-# hermes-agent does not depend on `mcp`, but its HTTP MCP transport imports
-# `streamablehttp_client` from mcp.client.streamable_http. That symbol was renamed
-# in mcp 2.x, so the client must stay on the 1.x line for `transport: http` to work.
-# (The pricewatch container serves MCP with 2.x — they are independent images.)
-RUN pip install --no-cache-dir "hermes-agent==0.19.0" "mcp>=1.9,<2"
-
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+# Nothing to apt-get: the base already ships git, curl, node, npm, ripgrep,
+# ffmpeg and Playwright's Chromium. It also seals /opt/hermes root-owned and
+# sets HERMES_DISABLE_LAZY_INSTALLS=1, so anything the agent needs at runtime
+# has to be baked in at build time — which is what these two COPYs are for.
 COPY skills /opt/hermes-skills
 COPY dashboard-themes /opt/hermes-dashboard-themes
-RUN chmod +x /usr/local/bin/entrypoint.sh
 
-WORKDIR /work
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["hermes"]
+# s6-overlay runs /etc/cont-init.d/* as root before the dashboard service and
+# the container command start; that is where config.yaml gets rendered from the
+# environment. See the header of the script for why it is numbered 018.
+COPY cont-init.d/018-hermes-shopping /etc/cont-init.d/018-hermes-shopping
+RUN chmod +x /etc/cont-init.d/018-hermes-shopping
+
+# ENTRYPOINT, CMD, WORKDIR, HERMES_HOME=/opt/data and the /opt/data volume are
+# all inherited. The entrypoint hands PID 1 to s6, which supervises the gateway
+# and the dashboard and restarts either one if it crashes; the compose
+# `command:` runs alongside them as s6's main program. Overriding ENTRYPOINT
+# here would throw all of that away.

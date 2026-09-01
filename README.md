@@ -21,12 +21,16 @@ or WhatsApp when something gets cheap.
 
 ```bash
 cp .env.example .env          # then edit: model endpoint, dashboard password, channels
-docker compose up -d pricewatch dashboard gateway
-docker compose run --rm hermes          # interactive agent in the terminal
+docker compose up -d
+docker compose exec hermes hermes       # interactive agent in the terminal
 ```
 
-(`gateway` is the cron ticker — without it, scheduled agent jobs never fire;
-see *Scheduled agent jobs* below.)
+Two containers: `pricewatch` is the price engine, `hermes` is the agent. The
+agent container runs the gateway, the cron ticker and the browser dashboard
+together under s6 supervision — that is one container by design, not an
+accident. Hermes' agent home is a single-writer store, so a second container
+pointed at the same volume corrupts sessions and memory. You reach the terminal
+agent with `exec`, not by starting another one.
 
 Then open **http://localhost:9119** and sign in.
 
@@ -42,8 +46,8 @@ Then just talk to it:
 ## Browser dashboard
 
 Hermes ships its own web UI — chat with the agent, browse past sessions, and edit
-model/provider/API-key config without touching a file. `docker compose up -d
-dashboard` runs it on **http://localhost:9119**, wired to the same config and the
+model/provider/API-key config without touching a file. It comes up with the
+`hermes` container on **http://localhost:9119**, wired to the same config and the
 same `pricewatch` tools as the terminal agent, so you can do all the price work
 from the browser.
 
@@ -56,27 +60,28 @@ HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=<choose one>
 HERMES_DASHBOARD_BASIC_AUTH_SECRET=<random string>   # keeps you signed in across restarts
 ```
 
-Without a password the container exits with an explanatory error rather than
-starting something unprotected. The UI build ships prebuilt in the wheel, so the
-service runs with `--skip-build` and needs no npm step.
+Without one Hermes fails closed and the dashboard refuses to serve; the
+container logs a warning at boot naming the two variables to set. The gateway and
+the cron ticker keep running regardless — a dashboard misconfiguration should not
+take scheduled jobs down with it.
 
 **Theme:** the dashboard ships eight built-in skins, and Hermes also scans
 `$HERMES_HOME/dashboard-themes/*.yaml` for user themes. `hermes/dashboard-themes/`
 holds ours — the vendored [boring-dark / boring-light](https://github.com/sorenisanerd/hermes-dashboard-themes)
-pair (flat, no teal tint, no grain, system fonts) — and `entrypoint.sh` copies them
-into the agent home on every start, so they show up in the switcher next to the
-built-ins. Pick the active one in `.env`:
+pair (flat, no teal tint, no grain, system fonts) — and the container's init script
+copies them into the agent home on every start, so they show up in the switcher next
+to the built-ins. Pick the active one in `.env`:
 
 ```ini
 HERMES_DASHBOARD_THEME=boring-dark   # or boring-light, default, midnight, ember, mono, cyberpunk, rose
 ```
 
-`entrypoint.sh` writes that to `dashboard.theme` in the generated `config.yaml`,
-which is also where the UI's own **Switch theme** menu saves — so switching in the
-browser works but is reset on the next `docker compose restart dashboard`. Change
-`.env` for a durable choice. To add another theme, drop its YAML in
-`hermes/dashboard-themes/` and rebuild (`docker compose build dashboard`); the
-directory is baked into the image, so a rebuild is what installs it.
+That is written to `dashboard.theme` in the generated `config.yaml`, which is also
+where the UI's own **Switch theme** menu saves — so switching in the browser works
+but is reset on the next `docker compose restart hermes`. Change `.env` for a
+durable choice. To add another theme, drop its YAML in `hermes/dashboard-themes/`
+and rebuild (`./scripts/rebuild.sh agent`); the directory is baked into the image,
+so a rebuild is what installs it.
 
 **Exposing it beyond localhost:** the published port is bound on your machine. If
 you want it reachable from elsewhere, put it behind a tunnel or reverse proxy with
@@ -86,8 +91,8 @@ transport.
 Useful commands:
 
 ```bash
-docker compose logs -f dashboard      # startup + request log
-docker compose restart dashboard      # pick up .env changes
+docker compose logs -f hermes         # startup + request log
+docker compose restart hermes         # pick up .env changes
 ```
 
 ## What actually works
@@ -358,19 +363,23 @@ jobs use a cron expression (`"0 */6 * * *"`) — `hermes cron list` shows
 Two pieces make agent-created cron jobs actually work, and both are wired into
 `docker-compose.yml`:
 
-1. **`HERMES_INTERACTIVE=1`** on the `hermes` and `dashboard` services — the
-   agent's `cronjob` tool is gated on an interactive-capable session and never
-   loads without it.
-2. **The `gateway` service** — hermes' cron ticker only runs inside a gateway
-   process (`hermes cron status` says exactly this). It shares the agent home
-   volume, so jobs created from the dashboard or terminal fire here.
+1. **`HERMES_INTERACTIVE=1`** — the agent's `cronjob` tool is gated on an
+   interactive-capable session and never loads without it.
+2. **`command: gateway run`** — hermes' cron ticker only runs inside a gateway
+   process (`hermes cron status` says exactly this). It is the container's main
+   program, so jobs created from the dashboard or the terminal fire in the same
+   container that holds the agent home.
+3. **`HERMES_ACCEPT_HOOKS=1`** — a scheduled job that wants to run a hook script
+   would otherwise stall on an approval prompt with nobody there to answer it.
+   Note this now applies to dashboard chats too, which the old separate gateway
+   container kept it away from.
 
 Useful commands:
 
 ```bash
-docker compose exec gateway hermes cron list     # what's scheduled, next runs
-docker compose exec gateway hermes cron runs     # execution history
-docker compose exec gateway hermes cron status   # is the ticker alive
+docker compose exec hermes hermes cron list     # what's scheduled, next runs
+docker compose exec hermes hermes cron runs     # execution history
+docker compose exec hermes hermes cron status   # is the ticker alive
 ```
 
 Delivery: with no messaging platform connected, job output is local-only (the
@@ -380,8 +389,9 @@ trackers, which push through Discord/Signal/WhatsApp on their own.
 
 ## Model configuration
 
-`hermes/entrypoint.sh` renders `~/.hermes/config.yaml` from `.env` on every start,
-so the container stays declarative — change `.env`, restart, done.
+`hermes/cont-init.d/018-hermes-shopping` renders `/opt/data/config.yaml` from
+`.env` on every start, so the container stays declarative — change `.env`,
+restart, done.
 
 Three settings matter for a self-hosted endpoint, and all three are load-bearing:
 
@@ -389,7 +399,7 @@ Three settings matter for a self-hosted endpoint, and all three are load-bearing
 |---|---|
 | `LLM_CONTEXT_LENGTH=131072` | Hermes assumes a 256K window when it cannot detect one, and refuses to run below 64K. Set your server's real `max_model_len` (`curl $LLM_BASE_URL/models` reports it). |
 | `LLM_MAX_TOKENS=8192` | Left alone, Hermes requests `max_tokens == context_length`; vLLM requires `prompt + max_tokens <= max_model_len`, so every call would fail once and retry. |
-| `mcp>=1.9,<2` (in the image) | hermes-agent 0.19 imports `streamablehttp_client`, which mcp 2.x renamed. The price engine serves MCP with 2.x — separate images, no conflict. |
+| `_config_version: 39` (in the generated config) | Without it Hermes reads the file as v0, below its v12 auto-migration floor, and every load prints "config predates version 12". Bump it with the base image tag; `hermes doctor` reports the version it wants. |
 
 ## REST API
 
@@ -439,15 +449,40 @@ package against your working tree** and fails loudly if they differ.
 
 ```bash
 ./scripts/rebuild.sh                 # pricewatch (the usual case)
-./scripts/rebuild.sh agent           # dashboard + gateway (hermes/ changes)
+./scripts/rebuild.sh agent           # the hermes container (hermes/ changes)
 ./scripts/rebuild.sh all             # everything
 ./scripts/rebuild.sh --smoke         # also run scripts/agent-smoke.sh
 ```
 
-`dashboard` and `gateway` are the same image, so the script always recreates
-them as a pair — rebuilding one alone leaves the other on the image it started
-from. After a pricewatch rebuild it also recreates the dashboard, whose open
-session otherwise holds an MCP stream to the container that just went away.
+After a pricewatch rebuild the script also recreates `hermes`, whose open
+dashboard session otherwise holds an MCP stream to the container that just went
+away.
+
+### Upgrading the agent
+
+The agent image is the official `nousresearch/hermes-agent`, pinned to a date
+tag in `hermes/Dockerfile`. Upstream retired the PyPI install path — `pip install
+hermes-agent` is now listed as unsupported alongside Homebrew and the AUR, "may
+already be broken right now", and the dashboard nags about it on every load.
+Docker is the Tier 1 target, so this repo layers its skills, themes and generated
+config onto that image rather than building its own.
+
+A Docker install has no `hermes update`. Upgrading is:
+
+```bash
+# 1. pick a tag: https://hub.docker.com/r/nousresearch/hermes-agent/tags
+# 2. edit the FROM line in hermes/Dockerfile
+# 3. back up the agent home first — the volume is the only copy of your
+#    cron jobs, sessions and memories
+mkdir -p backups && docker run --rm -v hermes-shopping_hermes_home:/from:ro \
+  -v "$PWD/backups":/to alpine tar czf /to/hermes_home-$(date +%F).tar.gz -C /from .
+./scripts/rebuild.sh agent
+docker compose exec hermes hermes doctor      # check the config version it wants
+```
+
+`hermes doctor` is the check that matters: if it reports a config version newer
+than the `_config_version` written by `hermes/cont-init.d/018-hermes-shopping`,
+bump that number too. `latest` is deliberately not used — it moves near-daily.
 
 ## Running the tests
 

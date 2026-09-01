@@ -12,3 +12,4 @@ CLAUDE.md
 .serena
 *.egg-info/
 .venv/
+backups/

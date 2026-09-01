@@ -1,11 +1,12 @@
 # Dashboard themes
 
-YAML files in this directory are copied into `$HERMES_HOME/dashboard-themes/` by
-`entrypoint.sh` on every container start, which is where Hermes scans for user
-themes (`hermes_cli/web_server.py::_discover_user_themes`). They then appear in
-the dashboard's theme switcher next to the built-ins.
+YAML files in this directory are copied into `$HERMES_HOME/dashboard-themes/`
+(`/opt/data/dashboard-themes/`) by `hermes/cont-init.d/018-hermes-shopping` on
+every container start, which is where Hermes scans for user themes
+(`hermes_cli/web_server.py::_discover_user_themes`). They then appear in the
+dashboard's theme switcher next to the built-ins.
 
-Pick the active one with `HERMES_DASHBOARD_THEME` in `.env` — `entrypoint.sh`
+Pick the active one with `HERMES_DASHBOARD_THEME` in `.env` — that same script
 regenerates `config.yaml` on every start, so a theme chosen in the UI (which
 writes `dashboard.theme` to that file) is reset on the next restart.
 
@@ -22,6 +23,6 @@ cp /tmp/hdt/themes/*.yaml hermes/dashboard-themes/
 ```
 
 Upstream's `scripts/install.sh` ends with `hermes config set
-display.dashboard_theme <name>`; on hermes-agent 0.19.0 the real key is
-`dashboard.theme`, so that line is a no-op. Use `HERMES_DASHBOARD_THEME`
+display.dashboard_theme <name>`; the real key is `dashboard.theme` (still true on
+hermes-agent 0.21.0), so that line is a no-op. Use `HERMES_DASHBOARD_THEME`
 instead.

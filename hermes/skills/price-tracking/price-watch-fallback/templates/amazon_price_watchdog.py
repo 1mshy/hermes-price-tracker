@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Silent price watchdog template (no_agent cron job).
 
-Copy to ~/.hermes/scripts/check_<item>.py, set ASIN/THRESHOLD/URLS.
+Copy to $HERMES_HOME/scripts/check_<item>.py, set ASIN/THRESHOLD/URLS.
 Prints ONE alert line when price <= THRESHOLD; prints nothing (and exits 0)
 when above threshold or when the page can't be read (bot challenge) --
 so the cron job never spams the user.

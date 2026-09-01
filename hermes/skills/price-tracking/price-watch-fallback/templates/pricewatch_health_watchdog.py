@@ -5,7 +5,7 @@ Prints ONLY when something is wrong — engine down, or a tracked listing that
 has failed 3+ consecutive sweeps (which means an alert could be silently
 missed). Empty stdout = healthy = no message (the watchdog pattern).
 
-Install: copy to ~/.hermes/scripts/, then
+Install: copy to $HERMES_HOME/scripts/, then
     cronjob action=create no_agent=true script=pricewatch_health_watchdog.py schedule='6h'
 """
 import json

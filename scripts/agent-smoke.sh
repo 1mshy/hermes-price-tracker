@@ -9,7 +9,9 @@ run() {
   echo "──────────────────────────────────────────────────────────"
   echo "PROMPT: $1"
   echo "──────────────────────────────────────────────────────────"
-  docker compose run --rm -T hermes hermes -z "$1" 2>/dev/null | tail -8
+  # exec, not run: the agent home has a single writer by design, and the
+  # `hermes` container is already holding it open for the gateway.
+  docker compose exec -T hermes hermes -z "$1" 2>/dev/null | tail -8
   echo
 }
 

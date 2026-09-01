@@ -6,7 +6,7 @@
 # working tree and refuses to report success on a mismatch.
 #
 #   ./scripts/rebuild.sh                 # pricewatch (the usual case)
-#   ./scripts/rebuild.sh agent           # dashboard + gateway (hermes/ changes)
+#   ./scripts/rebuild.sh agent           # the hermes container (hermes/ changes)
 #   ./scripts/rebuild.sh all             # everything
 #   ./scripts/rebuild.sh --skip-tests    # skip the offline suite
 #   ./scripts/rebuild.sh --smoke         # also drive the LLM through MCP + cron
@@ -22,23 +22,16 @@ while [[ $# -gt 0 ]]; do
     --skip-tests) skip_tests=true ;;
     --smoke)      smoke=true ;;
     -h|--help)    sed -n '2,12p' "$0" | sed 's/^#//; s/^ //'; exit 0 ;;
-    all)          services+=(pricewatch dashboard gateway) ;;
-    agent|hermes) services+=(dashboard gateway) ;;
-    -*)           echo "unknown flag: $1" >&2; exit 2 ;;
-    *)            services+=("$1") ;;
+    all)                    services+=(pricewatch hermes) ;;
+    agent|hermes)           services+=(hermes) ;;
+    dashboard|gateway)      services+=(hermes) ;;   # both live in `hermes` now
+    -*)                     echo "unknown flag: $1" >&2; exit 2 ;;
+    *)                      services+=("$1") ;;
   esac
   shift
 done
 [[ ${#services[@]} -eq 0 ]] && services=(pricewatch)
 
-# dashboard and gateway are the same image; rebuilding one without recreating
-# the other leaves a container running the image it was started from.
-if [[ " ${services[*]} " == *" dashboard "* && " ${services[*]} " != *" gateway "* ]]; then
-  services+=(gateway)
-fi
-if [[ " ${services[*]} " == *" gateway "* && " ${services[*]} " != *" dashboard "* ]]; then
-  services+=(dashboard)
-fi
 rebuilding() { [[ " ${services[*]} " == *" $1 "* ]]; }
 
 step() { echo; echo "── $* ──────────────────────────────────────────────" | cut -c1-72; }
@@ -96,13 +89,13 @@ if rebuilding pricewatch; then
   curl -fsS "localhost:${PW_PORT:-8077}/api/health" && echo
 fi
 
-# ── 4. reconnect the dashboard ──────────────────────────────────────────────
+# ── 4. reconnect the agent ──────────────────────────────────────────────────
 # A live dashboard session holds an MCP stream to the pricewatch container we
 # just replaced; restarting it forces a fresh handshake against the new engine.
-if rebuilding pricewatch && ! rebuilding dashboard; then
-  if docker compose ps --status running --services | grep -qx dashboard; then
-    step "restarting dashboard for a fresh MCP handshake"
-    docker compose up -d --force-recreate --wait dashboard
+if rebuilding pricewatch && ! rebuilding hermes; then
+  if docker compose ps --status running --services | grep -qx hermes; then
+    step "restarting the agent for a fresh MCP handshake"
+    docker compose up -d --force-recreate --wait hermes
   fi
 fi
 
@@ -116,4 +109,4 @@ step "done"
 docker compose ps
 echo
 echo "dashboard: http://localhost:${HERMES_DASHBOARD_PORT:-9119}"
-echo "terminal agent: docker compose run --rm hermes"
+echo "terminal agent: docker compose exec hermes hermes"

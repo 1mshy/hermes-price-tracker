@@ -66,7 +66,7 @@ don't crash on a challenged page — exit 0 silently instead.
 
 Steps:
 
-1. Copy `templates/amazon_price_watchdog.py` to `~/.hermes/scripts/`, set `ASIN`, `THRESHOLD`, and `URLS`.
+1. Copy `templates/amazon_price_watchdog.py` to `$HERMES_HOME/scripts/` (`/opt/data/scripts/`), set `ASIN`, `THRESHOLD`, and `URLS`.
 2. Test the **silent path** for real: run the script, expect exit 0 and no output.
 3. Test the **alert path**: simulate a low price (e.g. string-replace the `priceAmount` in a fetched page and run the parser against it). If the user declines the verification step, explicitly say the alert branch is unverified — never claim the job is proven.
 4. Create the cron job: `cronjob action=create`, `no_agent=true`, `script=<path>`, `schedule='30m'` (or the interval the user names). Leave `prompt` empty (ignored in no_agent mode).

@@ -22,69 +22,67 @@ services:
       retries: 5
       start_period: 20s
 
-  # ── the agent you talk to ───────────────────────────────────────────────
+  # ── the agent: gateway, cron ticker and browser dashboard in one container ─
+  # This used to be three services on a hand-rolled `pip install hermes-agent`
+  # image. The official image supervises the gateway and the dashboard under
+  # s6 in a single container, and upstream is explicit that two containers must
+  # never share one agent home — session files and memory stores are not built
+  # for concurrent writers. So: one service, and you reach the terminal agent
+  # through it rather than starting a second container.
+  #
+  #   docker compose exec hermes hermes          # interactive agent
+  #   docker compose exec hermes hermes cron list
+  #
+  # `command: gateway run` runs as s6's main program, so the container's
+  # lifetime tracks the gateway; the dashboard is a supervised service beside
+  # it (HERMES_DASHBOARD below) and s6 restarts either one if it crashes.
+  # Without the gateway the cron scheduler never ticks and agent-scheduled
+  # jobs never fire — `hermes cron status` says exactly this. deliver=local
+  # output lands in /opt/data/cron/output (`hermes cron runs`); connect a
+  # messaging platform later (`hermes gateway setup`) for push delivery.
   hermes:
     build: ./hermes
-    image: hermes-shopping/hermes:1.0.0
+    image: hermes-shopping/hermes:2.0.0
     env_file: [.env]
     environment:
       PRICEWATCH_MCP_URL: http://pricewatch:8000/mcp
-      PRICEWATCH_HEALTH_URL: http://pricewatch:8000/api/health
+      # Start the image's supervised dashboard service. It binds 0.0.0.0 inside
+      # the container and always requires auth off loopback — password in .env.
+      HERMES_DASHBOARD: "1"
       # The agent's cronjob tool (scheduled jobs / silent watchdogs) is gated
       # on an interactive-capable session; without this the tool never loads.
       HERMES_INTERACTIVE: "1"
-    depends_on:
-      pricewatch:
-        condition: service_healthy
-    volumes:
-      - hermes_home:/root/.hermes
-      - ./workspace:/work
-    stdin_open: true          # `docker compose run --rm hermes` gives an interactive agent
-    tty: true
-    restart: "no"
-
-  # ── browser dashboard: chat with the agent, manage config/keys/sessions ──
-  dashboard:
-    build: ./hermes
-    image: hermes-shopping/hermes:1.0.0
-    env_file: [.env]
-    environment:
-      PRICEWATCH_MCP_URL: http://pricewatch:8000/mcp
-      PRICEWATCH_HEALTH_URL: http://pricewatch:8000/api/health
-      HERMES_INTERACTIVE: "1"   # expose the cronjob tool in dashboard chats
-    # Binding off loopback always requires auth — set the password in .env.
-    command: hermes dashboard --host 0.0.0.0 --port 9119 --no-open --skip-build
+      # Headless: auto-approve job hook scripts, or a scheduled job stalls
+      # forever waiting for a prompt nobody is there to answer. Note this now
+      # covers dashboard chats too, which the separate gateway container used
+      # to keep it away from.
+      HERMES_ACCEPT_HOOKS: "1"
+    command: gateway run
     depends_on:
       pricewatch:
         condition: service_healthy
     ports:
-      - "${HERMES_DASHBOARD_PORT:-9119}:9119"
+      # Same port both sides: HERMES_DASHBOARD_PORT is read by the dashboard
+      # service inside the container, so host and container cannot drift.
+      - "${HERMES_DASHBOARD_PORT:-9119}:${HERMES_DASHBOARD_PORT:-9119}"
     volumes:
-      - hermes_home:/root/.hermes
-      - ./workspace:/work
-    restart: unless-stopped
-
-  # ── cron ticker: without this, agent-scheduled jobs never fire ──────────
-  # The hermes cron scheduler only ticks inside a running gateway process
-  # (`hermes cron status` says exactly this). It shares the agent home volume,
-  # so jobs created in the dashboard or terminal agent run here on schedule;
-  # deliver=local output lands in ~/.hermes/cron/output (see `hermes cron runs`).
-  # Connect a messaging platform later (`hermes gateway setup`) for push delivery.
-  gateway:
-    build: ./hermes
-    image: hermes-shopping/hermes:1.0.0
-    env_file: [.env]
-    environment:
-      PRICEWATCH_MCP_URL: http://pricewatch:8000/mcp
-      PRICEWATCH_HEALTH_URL: http://pricewatch:8000/api/health
-      HERMES_ACCEPT_HOOKS: "1"  # headless: auto-approve job hook scripts
-    command: hermes gateway run
-    depends_on:
-      pricewatch:
-        condition: service_healthy
-    volumes:
-      - hermes_home:/root/.hermes
-      - ./workspace:/work
+      # HERMES_HOME is /opt/data in the official image, not /root/.hermes.
+      - hermes_home:/opt/data
+      # Nested inside the agent home on purpose: HERMES_WRITE_SAFE_ROOT is
+      # /opt/data, and `workspace` is one of the directories the image already
+      # treats as agent-owned state.
+      - ./workspace:/opt/data/workspace
+    working_dir: /opt/data/workspace
+    healthcheck:
+      # No -f: the auth gate answers an anonymous request with a 302 to the
+      # login page, and that is a healthy dashboard. Any response at all beats
+      # the failure this catches — the dashboard dying because .env has no
+      # password, which otherwise only shows up in the log.
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://127.0.0.1:${HERMES_DASHBOARD_PORT:-9119}/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     restart: unless-stopped
 
   # ── optional: Signal delivery bridge (docker compose --profile signal up -d) ──
