@@ -13,18 +13,20 @@ from urllib.parse import quote_plus
 
 from lxml import html as lxml_html
 
-from .. import matching
+from .. import matching, preferences
 from ..extract import extract
 from ..fetch import Blocked, fetcher
-from ..money import detect_currency, parse_price
+from ..money import currency_for_host, detect_currency, parse_price, region_for_host
 from ..settings import settings
 from .apis import KeepaAmazon
-from .base import StoreAdapter, StoreResult
+from .base import StoreAdapter, StoreResult, host_of
 
 ASIN_RE = re.compile(r"/(?:dp|gp/product|gp/aw/d)/([A-Z0-9]{10})")
 
-# Amazon serves prices in the currency of the marketplace TLD, regardless of the
-# symbol its markup uses, so start from the domain and let page data refine it.
+# The regional marketplaces bill in one currency each, whatever symbol their
+# markup uses, so the TLD settles it. amazon.com is deliberately absent: it
+# shows a visitor abroad the USD price converted into their own money, so
+# there the label beside the figure is the only honest source.
 _TLD_CURRENCY = {"ca": "CAD", "co.uk": "GBP", "de": "EUR", "fr": "EUR",
                  "it": "EUR", "es": "EUR", "com.au": "AUD", "co.jp": "JPY"}
 
@@ -143,13 +145,19 @@ class AmazonAdapter(StoreAdapter):
         "//span[contains(@class,'apexPriceToPay')]//span[@class='a-offscreen']/text()",
     )
 
-    def _currency_for(self, url: str, page_text: str) -> str:
-        host = url.split("/", 3)[2] if "//" in url else url
+    def _currency_for(self, url: str, price_text: str) -> str:
+        """Which money the buy-box figure is in.
+
+        Regional marketplaces: the TLD. amazon.com: the label on the figure
+        itself, because from a Canadian address the same listing reads
+        "CAD 138.83" on one fetch and "$99.99" on the next — a converted
+        display, not a price change. Reading the label keeps both honest.
+        """
+        host = host_of(url)
         for tld, code in _TLD_CURRENCY.items():
-            if host.endswith(".amazon." + tld) or host.endswith("amazon." + tld):
+            if host == "amazon." + tld or host.endswith(".amazon." + tld):
                 return code
-        match = _PRICE_AMOUNT_RE.search(page_text[:600_000])
-        return detect_currency(match.group(2), "USD") if match else "USD"
+        return detect_currency(price_text, "USD")
 
     def _parse(self, url: str, page_text: str, asin: str | None) -> StoreResult | None:
         """Pull price/title/stock from Amazon HTML (HTTP or rendered). None = miss."""
@@ -157,28 +165,62 @@ class AmazonAdapter(StoreAdapter):
             doc = lxml_html.fromstring(page_text)
         except Exception:
             return None
-        # Prefer the exact buy-box JSON, then the DOM price spans.
+        # Prefer the exact buy-box JSON, then the DOM price spans. Keep the
+        # text the figure came with: on .com it is the only currency evidence.
         price = None
+        price_text = ""
         m = _PRICE_AMOUNT_RE.search(page_text[:600_000])
         if m:
             price = parse_price(m.group(1))
+            price_text = m.group(2)
         if price is None:
             for xpath in self._PRICE_XPATHS:
-                hits = doc.xpath(xpath)
-                price = next((p for p in (parse_price(h) for h in hits) if p), None)
+                for hit in doc.xpath(xpath):
+                    price = parse_price(hit)
+                    if price:
+                        price_text = hit
+                        break
                 if price:
                     break
         if price is None:
             return None
         title = doc.xpath("//span[@id='productTitle']/text()")
         availability = " ".join(doc.xpath("//div[@id='availability']//text()")).strip().lower()
+        host = host_of(url)
+        currency = self._currency_for(url, price_text)
+        native = currency_for_host(host, "USD")
+        extra: dict = {}
+        if currency != native:
+            extra["note"] = (
+                f"{host} showed this price in {currency} because the visitor is abroad; "
+                f"the listing bills in {native}, and the converted figure changes from one "
+                f"read to the next — track it on the regional storefront instead")
         return StoreResult(
             store=self.name, url=url,
             title=(title[0].strip() if title else None), price=price,
-            currency=self._currency_for(url, page_text),
+            currency=currency,
             in_stock=("unavailable" not in availability and "out of stock" not in availability),
-            sku=asin,
+            sku=asin, extra=extra,
         )
+
+    def regional_url(self, url: str) -> str | None:
+        """amazon.com/dp/ASIN → amazon.ca/dp/ASIN for a Canadian shopper.
+
+        ASINs are shared across marketplaces, so this is a hostname swap;
+        whether the listing exists there is for the fetch to find out. Only
+        for a country Amazon runs a marketplace in — a euro-zone shopper keeps
+        whatever link they pasted.
+        """
+        region = preferences.preferred_region()
+        if not region:
+            return None
+        target = self.storefront()
+        if region_for_host(target) != region:
+            return None
+        asin = ASIN_RE.search(url)
+        if not asin or host_of(url) == target:
+            return None
+        return f"https://www.{target}/dp/{asin.group(1)}"
 
     async def fetch_offer(self, url: str) -> StoreResult:
         asin_match = ASIN_RE.search(url)
@@ -186,7 +228,7 @@ class AmazonAdapter(StoreAdapter):
 
         # Keepa is allowed, cheap and reliable — always prefer it when configured.
         if asin:
-            keepa = await KeepaAmazon.lookup(asin)
+            keepa = await KeepaAmazon.lookup(asin, host=host_of(url))
             if keepa is not None:
                 keepa.url = url
                 return keepa

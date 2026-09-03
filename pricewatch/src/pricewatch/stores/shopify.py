@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 from decimal import Decimal
-from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from .. import preferences
 from ..fetch import fetcher
@@ -31,6 +31,22 @@ from ..settings import settings
 from .base import StoreAdapter, StoreResult, host_of
 
 _HANDLE_RE = re.compile(r"/products/([^/?#]+)")
+
+# suggest.json decorates every product URL with the search that found it
+# (?_pos=1&_psq=sunlu&_psid=<random>&_ss=e). The _psid differs on every call,
+# so the same listing came back as a new offer each time coverage was widened.
+_SEARCH_TRACKING_PARAMS = frozenset({"_pos", "_psq", "_psid", "_ss", "_sid"})
+
+
+def _canonical_product_url(url: str) -> str:
+    """Drop Shopify's search-attribution parameters and keep the rest — a
+    ?variant= is part of what the listing is."""
+    parts = urlsplit(url)
+    if not parts.query:
+        return url
+    kept = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+            if k not in _SEARCH_TRACKING_PARAMS]
+    return urlunsplit(parts._replace(query=urlencode(kept), fragment=""))
 #: A Markets locale segment: /en-ca, /fr-ca, /de, /en-eu.
 _LOCALE_RE = re.compile(r"^[a-z]{2}(?:-[a-z]{2})?$")
 
@@ -199,7 +215,7 @@ class ShopifyAdapter(StoreAdapter):
         available = variant.get("available", data.get("available"))
         return StoreResult(
             store=store,
-            url=url,
+            url=_canonical_product_url(url),
             title=data.get("title"),
             price=money(variant.get("price") or data.get("price")),
             currency=await market_currency(
@@ -240,6 +256,7 @@ class ShopifyAdapter(StoreAdapter):
             # onto the bare origin — prefixing again would give /en-ca/en-ca/.
             if url.startswith("/"):
                 url = root + url
+            url = _canonical_product_url(url)
             results.append(
                 StoreResult(
                     store=self.name,

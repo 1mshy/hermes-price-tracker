@@ -5,7 +5,7 @@ import asyncio
 from contextlib import contextmanager
 from typing import Callable, TypeVar
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import Base
@@ -33,6 +33,35 @@ T = TypeVar("T")
 
 def init_db() -> None:
     Base.metadata.create_all(_engine)
+    added = add_missing_columns(_engine)
+    if added:
+        import logging
+        logging.getLogger(__name__).info("schema: added %s", ", ".join(added))
+
+
+def add_missing_columns(engine) -> list[str]:
+    """Bring a database created under an older model up to the current one.
+
+    create_all adds tables, never columns, so a column added to a model would
+    otherwise leave every deployed database failing on its first read.
+    Additive only: each column the model has and the table lacks is appended
+    with its declared type. Returns the "table.column" names it added.
+    """
+    inspector = inspect(engine)
+    existing = set(inspector.get_table_names())
+    added: list[str] = []
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if table.name not in existing:
+                continue
+            present = {c["name"] for c in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in present:
+                    continue
+                kind = column.type.compile(dialect=engine.dialect)
+                conn.execute(text(f"ALTER TABLE {table.name} ADD COLUMN {column.name} {kind}"))
+                added.append(f"{table.name}.{column.name}")
+    return added
 
 
 @contextmanager

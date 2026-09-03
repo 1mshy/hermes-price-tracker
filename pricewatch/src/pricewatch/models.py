@@ -88,6 +88,11 @@ class Tracker(Base):
     drop_pct: Mapped[float | None] = mapped_column(nullable=True)
     # price the percentage rule is measured against; set on creation, refreshed upward only
     baseline_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    # Currency the thresholds are written in — that of the listing the watch was
+    # created from. Listings in any other currency stay on the watch for
+    # reference but are never measured against these numbers: USD 99.99 is not
+    # "below" a CAD 119 baseline, whatever the digits say.
+    currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
 
     channels: Mapped[str] = mapped_column(String(200), default="")   # "discord,signal" — blank = all configured
     cooldown_hours: Mapped[int] = mapped_column(Integer, default=12)

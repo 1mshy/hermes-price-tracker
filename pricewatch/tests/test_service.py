@@ -49,11 +49,15 @@ def test_cooldown_bypassed_when_price_falls_further():
     assert service._should_notify(tracker, Decimal("44"))
 
 
-def test_cooldown_expiry_allows_repeat():
+def test_cooldown_expiry_allows_a_repeat_only_once_the_price_has_moved():
+    # The same figure every twelve hours is not news — that is the double
+    # push the README promises will not happen ("a flat price stays quiet").
     tracker = _tracker(target_price=Decimal("50"),
                        last_notified_at=utcnow() - dt.timedelta(hours=13),
                        last_notified_price=Decimal("45"))
-    assert service._should_notify(tracker, Decimal("45"))
+    assert not service._should_notify(tracker, Decimal("45"))
+    assert service._should_notify(tracker, Decimal("46"))      # moved, still qualifies
+    assert service._should_notify(tracker, Decimal("44"))
 
 
 def test_naive_last_notified_treated_as_utc():
@@ -184,3 +188,202 @@ def test_listings_without_a_condition_flag_are_treated_as_new(monkeypatch):
     ])
     assert out["best_price"] == 129.99
     assert len(out["offers"]) == 2
+
+
+# ── one currency per watch ───────────────────────────────────────────────
+# The bug: an amazon.com listing read USD 99.99 onto a watch whose CAD 119
+# baseline came from West3D, and "down 16%" was pushed twice. Digits from
+# two currencies are never compared.
+from pricewatch import preferences
+from pricewatch.models import Tracker as _Tracker
+
+
+def _seed(session, offers, title="Sunlu AMS heater"):
+    product = Product(title=title, match_key=title.lower())
+    session.add(product)
+    session.flush()
+    for i, (store, price, currency) in enumerate(offers):
+        session.add(Offer(product_id=product.id, store=store,
+                          url=f"https://{store}.example/p/{product.id}-{i}",
+                          currency=currency, last_price=Decimal(str(price)),
+                          in_stock=True, consecutive_errors=0, active=True))
+    session.flush()
+    return product.id
+
+
+def _capture_dispatch(monkeypatch):
+    sent = []
+
+    async def dispatch(alert, only=None):
+        sent.append(alert)
+        return {"ntfy": "sent"}
+    monkeypatch.setattr(service, "dispatch", dispatch)
+    return sent
+
+
+def test_best_offer_stays_within_the_watch_currency():
+    init_db()
+    with session_scope() as session:
+        pid = _seed(session, [("west3d", "119", "CAD"), ("amazon", "99.99", "USD")])
+        assert service._best_offer(session, pid, "CAD").store == "west3d"
+        assert service._best_offer(session, pid, "USD").store == "amazon"
+        assert service._best_offer(session, pid, "EUR") is None
+        assert service._best_offer(session, pid).store == "amazon"    # unscoped: raw digits
+
+
+def test_a_cheaper_foreign_listing_does_not_fire_a_cad_watch(monkeypatch):
+    init_db()
+    sent = _capture_dispatch(monkeypatch)
+    with session_scope() as session:
+        pid = _seed(session, [("west3d", "119", "CAD"), ("amazon", "99.99", "USD")])
+        tracker = _tracker(product_id=pid, label="SUNLU AMS Heater", currency="CAD",
+                           drop_pct=15.0, baseline_price=Decimal("119"))
+        session.add(tracker)
+        session.flush()
+        tid = tracker.id
+    fired = asyncio.run(service.evaluate_trackers())
+    assert tid not in {f["tracker_id"] for f in fired}
+    assert not any(a.store == "amazon" and a.price == 99.99 for a in sent)
+
+
+def test_a_drop_in_the_watch_currency_fires_and_names_the_currency(monkeypatch):
+    init_db()
+    sent = _capture_dispatch(monkeypatch)
+    with session_scope() as session:
+        pid = _seed(session, [("west3d", "99", "CAD"), ("amazon", "99.99", "USD")])
+        tracker = _tracker(product_id=pid, currency="CAD", drop_pct=15.0,
+                           baseline_price=Decimal("119"))
+        session.add(tracker)
+        session.flush()
+        tid = tracker.id
+    fired = [f for f in asyncio.run(service.evaluate_trackers()) if f["tracker_id"] == tid]
+    assert fired and fired[0]["store"] == "west3d"
+    alert = next(a for a in sent if a.store == "west3d" and a.price == 99.0)
+    assert alert.currency == "CAD"
+    assert "CA$99.00" in alert.body and "CA$119.00" in alert.body
+
+
+def test_reasons_are_written_in_the_watch_currency():
+    tracker = _tracker(target_price=Decimal("120"), currency="CAD")
+    assert service._reasons(tracker, Decimal("119")) == ["at or below your target of CA$120.00"]
+
+
+def test_list_trackers_reports_the_currency_and_counts_foreign_listings():
+    init_db()
+    with session_scope() as session:
+        pid = _seed(session, [("west3d", "119", "CAD"), ("amazon", "99.99", "USD")])
+        tracker = _tracker(product_id=pid, label="foreign-count", currency="CAD",
+                           target_price=Decimal("80"))
+        session.add(tracker)
+        session.flush()
+        tid = tracker.id
+    row = next(r for r in asyncio.run(service.list_tracked()) if r["tracker_id"] == tid)
+    assert row["currency"] == "CAD"
+    assert row["current_best"]["store"] == "west3d"
+    assert row["current_best"]["currency"] == "CAD"
+    assert row["foreign_listings"] == 1
+    assert "never measured" in row["note"]
+
+
+def test_backfill_gives_old_watches_the_currency_of_their_baseline_listing():
+    init_db()
+    with session_scope() as session:
+        pid = _seed(session, [("amazon", "99.99", "USD"), ("west3d", "119", "CAD")])
+        tracker = _tracker(product_id=pid, baseline_price=Decimal("119"), drop_pct=15.0)
+        session.add(tracker)
+        session.flush()
+        tid = tracker.id
+        assert tracker.currency is None
+    asyncio.run(service.backfill_tracker_currency())
+    with session_scope() as session:
+        assert session.get(_Tracker, tid).currency == "CAD"
+
+
+def _two_listings(usd_price="79.99"):
+    return [
+        StoreResult(store="amazon", url="https://amazon.example/dp/1", title="Sunlu AMS Heater",
+                    price=Decimal(usd_price), currency="USD", in_stock=True),
+        StoreResult(store="west3d", url="https://west3d.example/p/1", title="Sunlu AMS Heater",
+                    price=Decimal("119"), currency="CAD", in_stock=True),
+    ]
+
+
+def test_track_query_baselines_on_a_listing_in_the_users_currency(monkeypatch):
+    preferences._state = ("CAD", "CA", "runtime-override")
+    try:
+        out = _track(monkeypatch, _two_listings())
+    finally:
+        preferences.reload()
+    assert out["ok"]
+    assert (out["currency"], out["best_store"], out["best_price"]) == ("CAD", "west3d", 119.0)
+    assert len(out["offers"]) == 2                     # the USD listing is still watched
+    assert {o["currency"] for o in out["offers"]} == {"CAD", "USD"}
+
+
+def test_track_query_without_a_preference_compares_at_an_indicative_rate(monkeypatch):
+    # USD 79.99 really is cheaper than CAD 119; CAD 119 would beat USD 99.99.
+    preferences._state = ("", "", "env")
+    try:
+        cheap_usd = _track(monkeypatch, _two_listings("79.99"))
+        cheap_cad = _track(monkeypatch, _two_listings("99.99"))
+    finally:
+        preferences.reload()
+    assert (cheap_usd["best_store"], cheap_usd["currency"]) == ("amazon", "USD")
+    assert (cheap_cad["best_store"], cheap_cad["currency"]) == ("west3d", "CAD")
+
+
+# ── pasted links land on the regional storefront ─────────────────────────
+def _amazon_by_host(missing_on_ca=False):
+    seen = []
+
+    async def fetch(url):
+        seen.append(url)
+        on_ca = url.split("/")[2].endswith(".ca")
+        if on_ca and missing_on_ca:
+            return StoreResult(store="amazon", url=url, method="http:not-found",
+                               error="no longer listed on Amazon (404)")
+        return StoreResult(store="amazon", url=url, title="SUNLU AMS Heater",
+                           price=Decimal("167.73") if on_ca else Decimal("99.99"),
+                           currency="CAD" if on_ca else "USD", in_stock=True, method="test")
+    return fetch, seen
+
+
+def test_tracking_a_com_link_registers_the_regional_listing(monkeypatch):
+    init_db()
+    fetch, seen = _amazon_by_host()
+    monkeypatch.setattr(service, "fetch_offer", fetch)
+    monkeypatch.setattr(preferences, "preferred_region", lambda: "CA")
+    monkeypatch.setattr(preferences, "preferred_currency", lambda: "CAD")
+    out = asyncio.run(service.track_url("https://www.amazon.com/dp/B0FQVHHBQV", target_price=120))
+    assert out["ok"]
+    assert out["url"] == "https://www.amazon.ca/dp/B0FQVHHBQV"
+    assert (out["currency"], out["price"]) == ("CAD", 167.73)
+    assert "amazon.ca" in out["note"] and "CAD" in out["note"]
+    assert seen == ["https://www.amazon.ca/dp/B0FQVHHBQV"]      # .com never read
+
+
+def test_the_pasted_link_is_kept_when_the_regional_listing_is_missing(monkeypatch):
+    init_db()
+    fetch, seen = _amazon_by_host(missing_on_ca=True)
+    monkeypatch.setattr(service, "fetch_offer", fetch)
+    monkeypatch.setattr(preferences, "preferred_region", lambda: "CA")
+    monkeypatch.setattr(preferences, "preferred_currency", lambda: "CAD")
+    out = asyncio.run(service.track_url("https://www.amazon.com/dp/B0FQVHHBQ0", target_price=120))
+    assert out["ok"]
+    assert out["url"] == "https://www.amazon.com/dp/B0FQVHHBQ0"
+    assert out["currency"] == "USD"
+    assert "note" not in out
+
+
+def test_adding_a_foreign_listing_to_a_watch_says_it_will_not_alert(monkeypatch):
+    init_db()
+    fetch, _ = _amazon_by_host()
+    monkeypatch.setattr(service, "fetch_offer", fetch)
+    monkeypatch.setattr(preferences, "preferred_region", lambda: "")
+    monkeypatch.setattr(preferences, "preferred_currency", lambda: "")
+    with session_scope() as session:
+        pid = _seed(session, [("west3d", "119", "CAD")])
+        session.add(_tracker(product_id=pid, currency="CAD", target_price=Decimal("80")))
+    out = asyncio.run(service.add_offer(pid, "https://www.amazon.com/dp/B0FQVHHBQV"))
+    assert out["ok"] and out["currency"] == "USD"
+    assert "never triggers" in out["note"]

@@ -235,14 +235,32 @@ def _parse_ebay_search(raw: str, store: str = "ebay", limit: int = 5) -> list[St
     return results
 
 
+# Keepa numbers its marketplaces; each bills in exactly one currency.
+_KEEPA_MARKETS = {
+    "amazon.com": (1, "USD"), "amazon.co.uk": (2, "GBP"), "amazon.de": (3, "EUR"),
+    "amazon.fr": (4, "EUR"), "amazon.co.jp": (5, "JPY"), "amazon.ca": (6, "CAD"),
+    "amazon.it": (8, "EUR"), "amazon.es": (9, "EUR"), "amazon.com.au": (13, "AUD"),
+}
+
+
 class KeepaAmazon:
     """Amazon pricing via Keepa. Optional, paid, but the only dependable route."""
 
     @staticmethod
-    async def lookup(asin: str, domain: int = 1) -> StoreResult | None:
+    async def lookup(asin: str, host: str = "amazon.com") -> StoreResult | None:
+        """Price on the marketplace `host` names.
+
+        The same ASIN is a different listing, in a different currency, on each
+        marketplace — asking Keepa's US market about an amazon.ca link would
+        put a USD figure under a .ca URL.
+        """
         key = settings.keepa_api_key
         if not key:
             return None
+        host = (host or "").lower().removeprefix("www.")
+        if host not in _KEEPA_MARKETS:
+            host = "amazon.com"
+        domain, currency = _KEEPA_MARKETS[host]
         endpoint = (f"https://api.keepa.com/product?key={key}&domain={domain}"
                     f"&asin={asin}&stats=1&history=0")
         try:
@@ -260,6 +278,6 @@ class KeepaAmazon:
         if cents is None:
             return None
         from decimal import Decimal
-        return StoreResult(store="amazon", url=f"https://www.amazon.com/dp/{asin}",
+        return StoreResult(store="amazon", url=f"https://www.{host}/dp/{asin}",
                            title=product.get("title"), price=Decimal(cents) / 100,
-                           currency="USD", in_stock=True, sku=asin, method="keepa-api")
+                           currency=currency, in_stock=True, sku=asin, method="keepa-api")

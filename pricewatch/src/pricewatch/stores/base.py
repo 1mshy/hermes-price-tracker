@@ -118,6 +118,16 @@ class StoreAdapter:
                     return domain
         return self.domains[0]
 
+    def regional_url(self, url: str) -> str | None:
+        """The same listing on the user's regional storefront, when this store
+        runs one and the URL can be mapped onto it — else None.
+
+        Registration reads this first: a pasted amazon.com link is the same
+        ASIN on amazon.ca, and only the .ca page bills a Canadian shopper in
+        CAD. Refreshes never call it, so a stored URL stays what it was.
+        """
+        return None
+
     async def fetch_offer(self, url: str) -> StoreResult:      # pragma: no cover - interface
         raise NotImplementedError
 

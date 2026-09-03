@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from . import preferences, scheduler
+from . import preferences, scheduler, service
 from .api import router
 from .db import init_db
 from .fetch import fetcher
@@ -29,6 +29,9 @@ async def lifespan(app: FastAPI):
     # possibly before the settings table existed. Re-read it now the schema is
     # there, so a saved override is live from the first request.
     preferences.reload()
+    fixed = await service.backfill_tracker_currency()
+    if fixed:
+        log.info("gave %d pre-existing watch(es) the currency of their baseline listing", fixed)
     async with mcp.session_manager.run():
         scheduler.start()
         log.info("pricewatch ready — REST on /api, MCP on /mcp (currency: %s)",

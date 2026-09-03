@@ -245,3 +245,79 @@ def test_used_in_ordinary_copy_is_not_read_as_a_condition(monkeypatch):
     raw = _page({"asin": "B00PROD0003", "title": "Logitech MX Master 3S — used by professionals",
                  "price": "119.99"})
     assert "condition" not in _run(monkeypatch, raw, "logitech mx master 3s")[0].extra
+
+
+# ── pasted links land on the shopper's marketplace ───────────────────────
+def test_a_com_link_maps_onto_the_shoppers_marketplace(monkeypatch):
+    monkeypatch.setattr(preferences, "preferred_region", lambda: "CA")
+    adapter = AmazonAdapter()
+    assert (adapter.regional_url("https://www.amazon.com/dp/B0FQVHHBQV")
+            == "https://www.amazon.ca/dp/B0FQVHHBQV")
+    assert adapter.regional_url("https://www.amazon.ca/dp/B0FQVHHBQV") is None     # already there
+    assert adapter.regional_url("https://www.amazon.com/s?k=heater") is None       # no ASIN
+
+
+def test_links_are_left_alone_without_a_region(monkeypatch):
+    monkeypatch.setattr(preferences, "preferred_region", lambda: "")
+    monkeypatch.setattr(preferences, "preferred_currency", lambda: "")
+    assert AmazonAdapter().regional_url("https://www.amazon.com/dp/B0FQVHHBQV") is None
+
+
+def test_a_region_without_its_own_marketplace_keeps_the_link(monkeypatch):
+    monkeypatch.setattr(preferences, "preferred_region", lambda: "FR")
+    monkeypatch.setattr(preferences, "preferred_currency", lambda: "EUR")
+    assert AmazonAdapter().regional_url("https://www.amazon.com/dp/B0FQVHHBQV") is None
+
+
+# ── geo-converted prices on amazon.com ───────────────────────────────────
+def _pdp(price_text):
+    return (f'<html><body><span id="productTitle">SUNLU AMS Heater</span>'
+            f'<div id="corePriceDisplay_desktop_feature_div"><span class="a-price">'
+            f'<span class="a-offscreen">{price_text}</span></span></div>'
+            f'<div id="availability">In Stock</div></body></html>')
+
+
+def test_com_keeps_the_currency_it_actually_displayed():
+    # Live behaviour from a Canadian address: the .com buy box reads
+    # "CAD 138.83" on one fetch and "$99.99" on the next — one listing, two
+    # currencies. Labelling both "USD" is what made 99.99 look like a drop.
+    adapter = AmazonAdapter()
+    com = "https://www.amazon.com/dp/B0FQVHHBQV"
+    converted = adapter._parse(com, _pdp("CAD\xa0138.83"), "B0FQVHHBQV")
+    assert (converted.price, converted.currency) == (Decimal("138.83"), "CAD")
+    assert "amazon.com" in converted.extra["note"] and "USD" in converted.extra["note"]
+    plain = adapter._parse(com, _pdp("$99.99"), "B0FQVHHBQV")
+    assert (plain.price, plain.currency) == (Decimal("99.99"), "USD")
+    assert "note" not in plain.extra
+    assert adapter._parse(com, _pdp("CDN$ 138.83"), "B0FQVHHBQV").currency == "CAD"
+
+
+def test_buy_box_json_currency_symbol_is_read_on_com():
+    page = ('<html><body><script>{"priceAmount":138.83,"currencySymbol":"CAD"}</script>'
+            '<span id="productTitle">x</span></body></html>')
+    result = AmazonAdapter()._parse("https://www.amazon.com/dp/B0FQVHHBQV", page, "B0FQVHHBQV")
+    assert (result.price, result.currency) == (Decimal("138.83"), "CAD")
+
+
+def test_regional_marketplaces_bill_in_their_own_currency_whatever_the_symbol():
+    result = AmazonAdapter()._parse("https://www.amazon.ca/dp/B0FQVHHBQV", _pdp("$167.73"),
+                                    "B0FQVHHBQV")
+    assert result.currency == "CAD"
+    assert "note" not in result.extra
+
+
+def test_keepa_asks_the_marketplace_the_link_points_at(monkeypatch):
+    from pricewatch.stores import apis
+    seen = {}
+
+    async def get_json(url, **kwargs):
+        seen["url"] = url
+        return {"products": [{"title": "SUNLU AMS Heater", "stats": {"current": [16773, -1]}}]}
+
+    monkeypatch.setattr(apis.fetcher, "get_json", get_json)
+    monkeypatch.setattr(apis.settings, "keepa_api_key", "test-key")
+    result = asyncio.run(apis.KeepaAmazon.lookup("B0FQVHHBQV", host="www.amazon.ca"))
+    assert "domain=6" in seen["url"]
+    assert result.currency == "CAD"
+    assert result.url == "https://www.amazon.ca/dp/B0FQVHHBQV"
+    assert result.price == Decimal("167.73")

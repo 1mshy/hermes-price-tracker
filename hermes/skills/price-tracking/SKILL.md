@@ -2,7 +2,7 @@
 name: price-tracking
 description: Research prices across tech and 3D-printing retailers, check Reddit deal chatter, and set up price-drop alerts and scheduled checks. Use whenever the user asks what something costs, where it is cheapest, whether a deal is good, mentions a price seen on Reddit, or asks to be told when a price falls.
 metadata:
-  version: 1.2.0
+  version: 1.3.0
 ---
 
 # Price research and tracking
@@ -73,6 +73,15 @@ When one is set:
 - `compare_prices` reports `preferred_currency` and
   `results_in_preferred_currency`. If that count is zero, say so — "nothing in
   this comparison is priced in CAD" is useful information, not a failure.
+
+- **A watch has one currency.** `track_*` records the currency of the listing
+  the thresholds were written against (the user's own whenever a match bills
+  in it) and reports it as `currency`. Alerts are measured only against
+  listings in that currency; `list_trackers` counts the others under
+  `foreign_listings` — they are shown for reference and never fire the watch,
+  so a USD 99.99 on amazon.com is not "16% below" a CA$119 baseline. A pasted
+  Amazon link is registered on the regional marketplace (amazon.ca) when the
+  ASIN resolves there, and the result's `note` says so.
 
 Target prices are taken in the currency of the listing being watched, so when
 the user names a number, confirm which currency they mean if the cheapest

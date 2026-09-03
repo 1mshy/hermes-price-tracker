@@ -12,10 +12,10 @@ from sqlalchemy.orm import Session
 from . import matching, preferences
 from .db import in_db, session_scope
 from .models import AlertEvent, Offer, PricePoint, Product, Tracker, utcnow
-from .money import fmt
+from .money import fmt, usd_sort_key
 from .notify import Alert, dispatch
-from .stores.base import StoreResult
-from .stores.registry import ADAPTERS, fetch_offer, search_stores, store_key_for_url
+from .stores.base import StoreResult, host_of
+from .stores.registry import ADAPTERS, fetch_offer, resolve, search_stores, store_key_for_url
 
 log = logging.getLogger(__name__)
 
@@ -54,11 +54,33 @@ def _is_trackable(store_key: str) -> bool:
     return adapter is None or getattr(adapter, "trackable", True)
 
 
+async def _fetch_for_tracking(url: str) -> tuple[StoreResult, str | None]:
+    """Read a listing that is about to be registered, on the user's regional
+    storefront when the store runs one.
+
+    A pasted amazon.com link is the same ASIN on amazon.ca, and only the .ca
+    page bills a Canadian shopper in CAD; the .com page shows them a converted
+    figure that flips between CAD and USD from one read to the next — no
+    basis for an alert. The URL as given is the fallback when the regional
+    listing does not resolve. Returns the result and a note on what was
+    substituted, if anything.
+    """
+    adapter = await resolve(url)
+    regional = adapter.regional_url(url)
+    if regional and regional != url:
+        result = await fetch_offer(regional)
+        if result.ok:
+            return result, (f"tracking the {host_of(regional)} listing rather than the "
+                            f"{host_of(url)} one — that is the storefront that bills in "
+                            f"{result.currency}")
+    return await fetch_offer(url), None
+
+
 # ─────────────────────────── registration ────────────────────────────────
 async def track_url(url: str, *, target_price: float | None = None, drop_pct: float | None = None,
                     label: str = "", channels: str = "", cooldown_hours: int = 12) -> dict:
     """Start tracking a single product URL."""
-    result = await fetch_offer(url)
+    result, note = await _fetch_for_tracking(url)
     if not result.ok:
         return {"ok": False, "error": result.error or "could not read a price", "url": url,
                 "store": result.store, "method": result.method}
@@ -77,15 +99,19 @@ async def track_url(url: str, *, target_price: float | None = None, drop_pct: fl
             target_price=Decimal(str(target_price)) if target_price is not None else None,
             drop_pct=drop_pct,
             baseline_price=result.price,
+            currency=(result.currency or "").upper() or None,
             channels=channels,
             cooldown_hours=cooldown_hours,
         )
         session.add(tracker)
         session.flush()
-        return {"ok": True, "product_id": product.id, "tracker_id": tracker.id,
-                "offer_id": offer.id, "title": product.title,
-                "price": float(result.price), "currency": result.currency,
-                "store": result.store, "method": result.method}
+        out = {"ok": True, "product_id": product.id, "tracker_id": tracker.id,
+               "offer_id": offer.id, "title": product.title, "url": offer.url,
+               "price": float(result.price), "currency": result.currency,
+               "store": result.store, "method": result.method}
+        if note:
+            out["note"] = note
+        return out
 
     return await in_db(write)
 
@@ -116,7 +142,14 @@ async def track_query(description: str, *, stores: list[str] | None = None,
                           "track a specific URL at a supported store instead"),
                 "matches": [r.as_dict() for r in ranked[:5]],
                 "search_terms_tried": query_used}
-    cheapest = min(keep, key=lambda r: r.price)
+    # The watch's thresholds are written in the currency of the listing it is
+    # created from, so a listing in the user's own currency sets the baseline
+    # whenever there is one; beyond that, rank at an indicative rate so
+    # CAD 119 is not "more" than USD 99.99.
+    preferred = preferences.preferred_currency()
+    cheapest = min(keep, key=lambda r: (
+        bool(preferred) and (r.currency or "").upper() != preferred,
+        usd_sort_key(r.price, r.currency)))
 
     def write(session: Session) -> dict:
         product = Product(
@@ -133,14 +166,16 @@ async def track_query(description: str, *, stores: list[str] | None = None,
             target_price=Decimal(str(target_price)) if target_price is not None else None,
             drop_pct=drop_pct,
             baseline_price=cheapest.price,
+            currency=(cheapest.currency or "").upper() or None,
             channels=channels,
             cooldown_hours=cooldown_hours,
         )
         session.add(tracker)
         session.flush()
         return {"ok": True, "product_id": product.id, "tracker_id": tracker.id,
-                "title": product.title, "offers": [
-                    {"store": o.store, "url": o.url, "price": float(o.last_price or 0)}
+                "title": product.title, "currency": tracker.currency, "offers": [
+                    {"store": o.store, "url": o.url, "price": float(o.last_price or 0),
+                     "currency": o.currency}
                     for o in offers
                 ],
                 "best_price": float(cheapest.price), "best_store": cheapest.store,
@@ -151,7 +186,7 @@ async def track_query(description: str, *, stores: list[str] | None = None,
 
 async def add_offer(product_id: int, url: str) -> dict:
     """Attach another store's listing to an existing tracked product."""
-    result = await fetch_offer(url)
+    result, note = await _fetch_for_tracking(url)
     if not result.ok:
         return {"ok": False, "error": result.error or "could not read a price", "url": url}
 
@@ -160,8 +195,18 @@ async def add_offer(product_id: int, url: str) -> dict:
         if product is None:
             return {"ok": False, "error": f"no product {product_id}"}
         offer = _upsert_offer(session, product_id, result)
-        return {"ok": True, "offer_id": offer.id, "store": offer.store,
-                "price": float(result.price), "product": product.title}
+        out = {"ok": True, "offer_id": offer.id, "store": offer.store, "url": offer.url,
+               "price": float(result.price), "currency": offer.currency,
+               "product": product.title}
+        notes = [note] if note else []
+        watched_in = sorted({t.currency for t in product.trackers if t.currency})
+        if watched_in and (offer.currency or "").upper() not in watched_in:
+            notes.append(f"this listing bills in {offer.currency} while the watch on this "
+                         f"product is in {'/'.join(watched_in)} — it is shown for reference "
+                         f"and never triggers the alert")
+        if notes:
+            out["note"] = "; ".join(notes)
+        return out
 
     return await in_db(write)
 
@@ -272,39 +317,62 @@ async def refresh_offers(offer_ids: list[int] | None = None) -> dict:
 
 
 # ────────────────────────── alerting rules ───────────────────────────────
-def _best_offer(session: Session, product_id: int) -> Offer | None:
+def _best_offer(session: Session, product_id: int, currency: str | None = None) -> Offer | None:
+    """Cheapest live listing — within one currency when asked, because a
+    watch's thresholds only mean something against prices in their own money."""
     offers = session.scalars(
         select(Offer).where(Offer.product_id == product_id, Offer.active.is_(True))
     ).all()
+    if currency:
+        offers = [o for o in offers if (o.currency or "").upper() == currency.upper()]
     priced = [o for o in offers if o.last_price is not None and o.in_stock is not False]
     if not priced:
         priced = [o for o in offers if o.last_price is not None]
     return min(priced, key=lambda o: o.last_price) if priced else None
 
 
-def _reasons(tracker: Tracker, price: Decimal) -> list[str]:
+def _tracker_currency(session: Session, tracker: Tracker) -> str | None:
+    """The money a watch's thresholds are in. Rows from before watches carried
+    one fall back to the user's preference, then to the cheapest listing's."""
+    if tracker.currency:
+        return tracker.currency.upper()
+    preferred = preferences.preferred_currency()
+    if preferred:
+        return preferred
+    best = _best_offer(session, tracker.product_id)
+    return (best.currency or "").upper() or None if best else None
+
+
+def _reasons(tracker: Tracker, price: Decimal, currency: str | None = None) -> list[str]:
+    currency = currency or tracker.currency or "USD"
     hits = []
     if tracker.target_price is not None and price <= tracker.target_price:
-        hits.append(f"at or below your target of {fmt(tracker.target_price)}")
+        hits.append(f"at or below your target of {fmt(tracker.target_price, currency)}")
     if tracker.drop_pct and tracker.baseline_price:
         threshold = tracker.baseline_price * (Decimal(1) - Decimal(str(tracker.drop_pct)) / 100)
         if price <= threshold:
             pct = (1 - price / tracker.baseline_price) * 100
-            hits.append(f"down {pct:.1f}% from {fmt(tracker.baseline_price)} "
+            hits.append(f"down {pct:.1f}% from {fmt(tracker.baseline_price, currency)} "
                         f"(you asked for {tracker.drop_pct:g}%)")
     return hits
 
 
 def _should_notify(tracker: Tracker, price: Decimal) -> bool:
-    """Respect the cooldown, unless the price has fallen further since last time."""
-    if tracker.last_notified_at is None:
+    """Respect the cooldown, unless the price has fallen further since last time.
+
+    Once the cooldown is over a repeat still needs the price to have moved:
+    the same figure every twelve hours is not news, and it is exactly what
+    went out twice for one unchanged listing.
+    """
+    if tracker.last_notified_at is None or tracker.last_notified_price is None:
+        return True
+    if price < tracker.last_notified_price:
         return True
     last_at = tracker.last_notified_at
     if last_at.tzinfo is None:
         last_at = last_at.replace(tzinfo=dt.timezone.utc)
-    if utcnow() - last_at >= dt.timedelta(hours=tracker.cooldown_hours):
-        return True
-    return tracker.last_notified_price is not None and price < tracker.last_notified_price
+    cooled = utcnow() - last_at >= dt.timedelta(hours=tracker.cooldown_hours)
+    return cooled and price != tracker.last_notified_price
 
 
 async def evaluate_trackers() -> list[dict]:
@@ -312,10 +380,13 @@ async def evaluate_trackers() -> list[dict]:
     def read(session: Session) -> list[dict]:
         pending = []
         for tracker in session.scalars(select(Tracker).where(Tracker.active.is_(True))).all():
-            offer = _best_offer(session, tracker.product_id)
+            # Only listings in the watch's own currency are measured against
+            # its thresholds. A cheaper foreign listing is not a drop.
+            currency = _tracker_currency(session, tracker)
+            offer = _best_offer(session, tracker.product_id, currency)
             if offer is None or offer.last_price is None:
                 continue
-            hits = _reasons(tracker, offer.last_price)
+            hits = _reasons(tracker, offer.last_price, currency)
             if not hits or not _should_notify(tracker, offer.last_price):
                 continue
             product = session.get(Product, tracker.product_id)
@@ -389,22 +460,33 @@ async def list_tracked() -> list[dict]:
             product = session.get(Product, tracker.product_id)
             offers = session.scalars(
                 select(Offer).where(Offer.product_id == tracker.product_id)).all()
-            best = _best_offer(session, tracker.product_id)
-            rows.append({
+            currency = _tracker_currency(session, tracker)
+            best = _best_offer(session, tracker.product_id, currency)
+            foreign = [o for o in offers
+                       if currency and (o.currency or "").upper() != currency]
+            row = {
                 "tracker_id": tracker.id, "product_id": tracker.product_id,
                 "label": tracker.label, "title": product.title if product else None,
                 "active": tracker.active,
+                "currency": currency,
                 "target_price": float(tracker.target_price) if tracker.target_price else None,
                 "drop_pct": tracker.drop_pct,
                 "baseline_price": float(tracker.baseline_price) if tracker.baseline_price else None,
                 "current_best": (
-                    {"price": float(best.last_price), "store": best.store, "url": best.url}
+                    {"price": float(best.last_price), "currency": best.currency,
+                     "store": best.store, "url": best.url}
                     if best and best.last_price is not None else None),
                 "channels": tracker.channels or "all configured",
                 "last_notified_at": (tracker.last_notified_at.isoformat()
                                      if tracker.last_notified_at else None),
                 "offers": [_offer_dict(o) for o in offers],
-            })
+            }
+            if foreign:
+                row["foreign_listings"] = len(foreign)
+                row["note"] = (f"{len(foreign)} listing(s) bill in another currency than "
+                               f"this watch ({currency}); shown for reference, never "
+                               f"measured against its thresholds")
+            rows.append(row)
         return rows
     return await in_db(read)
 
@@ -492,10 +574,38 @@ async def set_tracker(tracker_id: int, **changes) -> dict:
                     value = Decimal(str(value))
                 setattr(tracker, field, value)
         if changes.get("reset_baseline"):
-            best = _best_offer(session, tracker.product_id)
+            best = _best_offer(session, tracker.product_id, _tracker_currency(session, tracker))
             if best and best.last_price is not None:
                 tracker.baseline_price = best.last_price
         return {"ok": True, "tracker_id": tracker.id}
+    return await in_db(write)
+
+
+async def backfill_tracker_currency() -> int:
+    """Give watches created before they carried a currency the one their
+    thresholds were written in.
+
+    That is the listing the watch was created from — the offer whose price is
+    the baseline — then the user's preferred currency, then whatever the
+    cheapest listing bills in. Runs at start-up; a no-op once every row is set.
+    """
+    def write(session: Session) -> int:
+        fixed = 0
+        for tracker in session.scalars(select(Tracker).where(Tracker.currency.is_(None))).all():
+            offers = session.scalars(select(Offer).where(
+                Offer.product_id == tracker.product_id).order_by(Offer.id)).all()
+            currency = None
+            if tracker.baseline_price is not None:
+                currency = next((o.currency for o in offers if tracker.baseline_price in
+                                 (o.last_price, o.lowest_price)), None)
+            if not currency:
+                currency = preferences.preferred_currency()
+            if not currency and offers:
+                currency = min(offers, key=lambda o: usd_sort_key(o.last_price, o.currency)).currency
+            if currency:
+                tracker.currency = currency.upper()
+                fixed += 1
+        return fixed
     return await in_db(write)
 
 

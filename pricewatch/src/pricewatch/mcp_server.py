@@ -85,9 +85,12 @@ async def compare_prices(query: str, stores: list[str] | None = None,
 @mcp.tool(
     description=(
         "Start tracking the price of a specific product URL and alert the user when it drops. "
-        "Set target_price for an absolute threshold in dollars (alert when price <= target), "
-        "and/or drop_pct for a relative one (alert when it falls that many percent below "
-        "today's price). At least one of the two should be given. channels is an optional "
+        "Set target_price for an absolute threshold (alert when price <= target), and/or "
+        "drop_pct for a relative one (alert when it falls that many percent below today's "
+        "price). At least one of the two should be given. Thresholds are in the currency of "
+        "the listing registered, which the result reports; an Amazon link is registered on "
+        "the user's regional marketplace (amazon.ca for a CAD shopper) when the ASIN resolves "
+        "there, and the result's `note` says so. channels is an optional "
         "comma-separated subset of 'discord,signal,whatsapp' — leave empty to use every "
         "channel the user has configured."
     )
@@ -105,8 +108,10 @@ async def track_product_url(url: str, target_price: float | None = None,
         "Start tracking a product described in words rather than by URL, across every store "
         "that stocks it. Give the most exhaustive description you can — brand, model and "
         "variant — because matching across stores depends on it. Creates one watch covering "
-        "all matched store listings and alerts on the cheapest one. Same target_price / "
-        "drop_pct semantics as track_product_url."
+        "all matched store listings and alerts on the cheapest one in the watch's currency "
+        "(the user's own whenever a match bills in it; listings in other currencies are kept "
+        "for reference but never trigger it). Same target_price / drop_pct semantics as "
+        "track_product_url."
     )
 )
 async def track_product_description(description: str, target_price: float | None = None,
@@ -120,9 +125,10 @@ async def track_product_description(description: str, target_price: float | None
 
 @mcp.tool(
     description=(
-        "List every active price watch with its target, its current cheapest offer, and every "
-        "store listing being monitored. Use this before modifying or deleting a tracker so you "
-        "can quote the right tracker_id."
+        "List every active price watch with its currency, target, current cheapest offer in "
+        "that currency, and every store listing being monitored (foreign_listings counts the "
+        "ones in other currencies, which never trigger the watch). Use this before modifying "
+        "or deleting a tracker so you can quote the right tracker_id."
     )
 )
 async def list_trackers() -> dict:

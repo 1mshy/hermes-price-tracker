@@ -4,10 +4,15 @@ from __future__ import annotations
 import re
 from decimal import Decimal, InvalidOperation
 
+# Ordered: every qualified dollar sign ("CDN$", "CA$", "US$", "A$") is checked
+# before the bare "$", which is a substring of all of them — amazon.com shows a
+# Canadian visitor "CDN$ 138.83", and that is not USD.
 _CURRENCY_SYMBOLS = {
-    "$": "USD", "US$": "USD", "USD": "USD", "CA$": "CAD", "C$": "CAD", "CAD": "CAD",
+    "US$": "USD", "CDN$": "CAD", "CA$": "CAD", "C$": "CAD", "A$": "AUD",
+    "USD": "USD", "CAD": "CAD", "AUD": "AUD",
     "£": "GBP", "GBP": "GBP", "€": "EUR", "EUR": "EUR", "¥": "JPY", "JPY": "JPY",
-    "A$": "AUD", "AUD": "AUD", "CHF": "CHF", "SEK": "SEK", "PLN": "PLN", "CZK": "CZK",
+    "CHF": "CHF", "SEK": "SEK", "PLN": "PLN", "CZK": "CZK",
+    "$": "USD",
 }
 
 # 1.234,56 (EU) vs 1,234.56 (US) — decide by which separator comes last.

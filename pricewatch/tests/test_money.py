@@ -54,3 +54,11 @@ def test_detect_currency():
 def test_fmt():
     assert fmt(Decimal("1234.5"), "USD") == "$1,234.50"
     assert fmt(None) == "n/a"
+
+
+def test_qualified_dollar_signs_are_not_usd():
+    assert detect_currency("CDN$ 138.83") == "CAD"
+    assert detect_currency("CA$138.83") == "CAD"
+    assert detect_currency("A$ 12") == "AUD"
+    assert detect_currency("US$ 12") == "USD"
+    assert detect_currency("$99.99") == "USD"

@@ -221,9 +221,19 @@ A watch fires when either condition is met:
 - `target_price` — absolute, e.g. alert under $250.
 - `drop_pct` — relative to the price when the watch was created.
 
+Both are in the **watch's currency** — that of the listing the watch was created
+from (the user's own whenever a match bills in it). Only listings in that
+currency are measured against them; a listing in another currency stays on the
+watch for reference, and `list_trackers` counts it under `foreign_listings`, but
+it never fires the alert. USD 99.99 is not "16% below" a CA$119 baseline, and
+amazon.com shows a Canadian visitor a *converted* figure that reads CAD on one
+fetch and USD on the next — which is why a pasted Amazon link is registered on
+the regional marketplace (amazon.ca) whenever the ASIN resolves there.
+
 Alerts are deduplicated by a per-tracker cooldown (default 12 h) that is bypassed
-only when the price falls *further* than the last alert, so a slow slide keeps
-notifying while a flat price stays quiet.
+only when the price falls *further* than the last alert; once it expires, a
+repeat goes out only if the price has moved since the last one, so a slow slide
+keeps notifying while a flat price stays quiet.
 
 Configure channels in `.env`:
 

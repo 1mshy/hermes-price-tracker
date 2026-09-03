@@ -192,8 +192,10 @@ def test_search_switches_to_the_market_that_bills_in_your_currency(monkeypatch):
     results = asyncio.run(adapter.search("pla", limit=3))
     assert [r.currency for r in results] == ["CAD"]
     assert results[0].price == Decimal("22.99")
-    # suggest.json already returns market paths; joining must not double them up.
-    assert results[0].url == "https://shop.example.com/en-ca/products/pla-pro?_pos=1"
+    # suggest.json already returns market paths; joining must not double them up
+    # (and its ?_pos= search attribution is dropped, or every search would
+    # register the same listing as a new offer).
+    assert results[0].url == "https://shop.example.com/en-ca/products/pla-pro"
     assert any("/en-ca/search/suggest.json" in url for url in seen)
 
 
@@ -257,3 +259,14 @@ def test_non_shopify_store_is_not_claimed(monkeypatch):
         "https://s.com/products.json": (404, "Not Found"),
         "https://s.com/products/x": (200, "<html><body>WooCommerce shop</body></html>")})
     assert asyncio.run(shopify.looks_like_shopify("https://s.com/products/x")) is False
+
+
+# ── suggest.json search attribution ──────────────────────────────────────
+def test_suggest_urls_lose_their_search_attribution():
+    from pricewatch.stores.shopify import _canonical_product_url
+    noisy = ("https://west3d.com/products/sunlu-ams-dryer"
+             "?_pos=1&_psq=sunlu+ams&_psid=ac31655e3&_ss=e")
+    assert _canonical_product_url(noisy) == "https://west3d.com/products/sunlu-ams-dryer"
+    assert (_canonical_product_url("https://west3d.com/products/x?variant=42&_pos=2")
+            == "https://west3d.com/products/x?variant=42")
+    assert _canonical_product_url("https://west3d.com/products/x") == "https://west3d.com/products/x"
