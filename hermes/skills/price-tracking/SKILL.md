@@ -2,7 +2,7 @@
 name: price-tracking
 description: Research prices across tech and 3D-printing retailers, check Reddit deal chatter, and set up price-drop alerts and scheduled checks. Use whenever the user asks what something costs, where it is cheapest, whether a deal is good, mentions a price seen on Reddit, asks to be told when a price falls, or wants to know when something is back in stock.
 metadata:
-  version: 1.4.0
+  version: 1.5.0
 ---
 
 # Price research and tracking
@@ -28,6 +28,7 @@ returns, with the store name and URL beside every figure.
 | "Did any alert actually fire?" | `list_alert_events` |
 | "Quote me in CAD from now on" | `set_preferred_currency` |
 | "What currency am I set to?" | `get_preferred_currency` |
+| "How fresh is that conversion?" / "Where did that ≈ figure come from?" | `get_exchange_rates` |
 
 ## Identifying the product precisely
 
@@ -68,9 +69,13 @@ When one is set:
   currency that store charges, and name the currency whenever it is not the
   user's.
 - Results that come from a foreign-currency store carry an
-  `approx_in_preferred` field. It is an *indicative* rate, not a rate of the
-  day: show it as an approximation beside the real price ("$99 USD ≈ CA$136"),
-  never in place of it, and never use it as an alert threshold.
+  `approx_in_preferred` field. It is *indicative*: the ECB reference rate,
+  refreshed every few hours while the engine can reach it, with a built-in
+  static table standing in otherwise — its `rate_as_of` names the day of
+  the rate in use, or is null when the fallback is (`get_exchange_rates`
+  gives the full picture). Show it as an approximation beside the real price
+  ("$99 USD ≈ CA$136"), never in place of it, and never use it as an alert
+  threshold.
 - `compare_prices` reports `preferred_currency` and
   `results_in_preferred_currency`. If that count is zero, say so — "nothing in
   this comparison is priced in CAD" is useful information, not a failure.

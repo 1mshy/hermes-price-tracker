@@ -3,6 +3,10 @@
 The sweep cadence starts from PW_CHECK_CRON but can be changed live (by the
 agent via the set_sweep_schedule MCP tool, or PATCH /api/schedule). A changed
 schedule is stored in the settings table so a container restart keeps it.
+
+The same scheduler also refreshes the indicative exchange rates (fx.py) on
+PW_FX_REFRESH_CRON — fixed at startup, not reschedulable, because nothing the
+user does should need it to change.
 """
 from __future__ import annotations
 
@@ -12,18 +16,22 @@ import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from . import service
-from .settings import settings
+from . import fx, service
+from .settings import Settings, settings
 
 log = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler(timezone="UTC")
 
 _JOB_ID = "price_sweep"
 _SETTING_KEY = "sweep_cron"
+_FX_JOB_ID = "fx_refresh"
 
 #: Politeness floor — sweeping 38 retailers more often than this is a good way
 #: to get every adapter blocked (see README "Notes and caveats").
 MIN_SWEEP_INTERVAL_SECONDS = 300
+#: The ECB publishes one rate a day and Frankfurter is a free service, so a
+#: refresh more often than hourly is pure waste.
+MIN_FX_INTERVAL_SECONDS = 3600
 
 _active_cron: str = settings.pw_check_cron
 _cron_source: str = "env"
@@ -43,17 +51,29 @@ async def sweep() -> None:
         log.exception("scheduled sweep failed")
 
 
-def validated_trigger(cron: str) -> CronTrigger:
-    """Parse a 5-field cron expression, rejecting overly aggressive cadences."""
+async def refresh_rates() -> None:
+    # fx.refresh() reports failure rather than raising, but a scheduler job
+    # must not be trusted to keep that promise: an exception here would kill
+    # the job for good.
     try:
-        trigger = CronTrigger.from_crontab(cron.strip(), timezone="UTC")
+        await fx.refresh()
+    except Exception:
+        log.exception("scheduled exchange-rate refresh failed")
+
+
+def _parse_cron(cron: str) -> CronTrigger:
+    try:
+        return CronTrigger.from_crontab(cron.strip(), timezone="UTC")
     except ValueError as exc:
         raise ScheduleError(
             f"invalid cron expression {cron!r}: {exc} "
             "(expected 5 fields, e.g. '*/30 * * * *' for every 30 minutes)"
         ) from exc
 
-    # Sample successive fire times to catch e.g. "* * * * *".
+
+def _shortest_gap(trigger: CronTrigger) -> float | None:
+    """Seconds between the next few fire times — catches e.g. "* * * * *"."""
+    shortest: float | None = None
     previous: dt.datetime | None = None
     probe = dt.datetime.now(dt.timezone.utc)
     for _ in range(4):
@@ -62,12 +82,41 @@ def validated_trigger(cron: str) -> CronTrigger:
             break
         if previous is not None:
             gap = (upcoming - previous).total_seconds()
-            if gap < MIN_SWEEP_INTERVAL_SECONDS:
-                raise ScheduleError(
-                    f"{cron!r} would sweep every {int(gap)}s — the floor is "
-                    f"{MIN_SWEEP_INTERVAL_SECONDS // 60} minutes so the "
-                    "retailers are not hammered")
+            shortest = gap if shortest is None else min(shortest, gap)
         previous, probe = upcoming, upcoming
+    return shortest
+
+
+def validated_trigger(cron: str) -> CronTrigger:
+    """Parse a 5-field cron expression, rejecting overly aggressive cadences."""
+    trigger = _parse_cron(cron)
+    gap = _shortest_gap(trigger)
+    if gap is not None and gap < MIN_SWEEP_INTERVAL_SECONDS:
+        raise ScheduleError(
+            f"{cron!r} would sweep every {int(gap)}s — the floor is "
+            f"{MIN_SWEEP_INTERVAL_SECONDS // 60} minutes so the "
+            "retailers are not hammered")
+    return trigger
+
+
+def fx_trigger() -> CronTrigger:
+    """The rate-refresh cadence from PW_FX_REFRESH_CRON.
+
+    Nobody is on the other end of a bad value at startup, so instead of a
+    ScheduleError it is logged and the built-in default takes over.
+    """
+    default = Settings.model_fields["pw_fx_refresh_cron"].default
+    cron = settings.pw_fx_refresh_cron
+    try:
+        trigger = _parse_cron(cron)
+        gap = _shortest_gap(trigger)
+        if gap is not None and gap < MIN_FX_INTERVAL_SECONDS:
+            raise ScheduleError(
+                f"{cron!r} would refresh rates every {int(gap)}s — the floor "
+                "is hourly; the ECB publishes once a day")
+    except ScheduleError as exc:
+        log.warning("PW_FX_REFRESH_CRON rejected (%s); using default %r", exc, default)
+        return CronTrigger.from_crontab(default, timezone="UTC")
     return trigger
 
 
@@ -144,8 +193,13 @@ def start() -> None:
     _active_cron, _cron_source = cron, source
     scheduler.add_job(sweep, trigger, id=_JOB_ID, replace_existing=True,
                       max_instances=1, coalesce=True, misfire_grace_time=600)
+    if settings.pw_fx_enabled:
+        scheduler.add_job(refresh_rates, fx_trigger(), id=_FX_JOB_ID,
+                          replace_existing=True, max_instances=1, coalesce=True,
+                          misfire_grace_time=3600)
     scheduler.start()
-    log.info("scheduler started (cron: %s, source: %s)", cron, source)
+    log.info("scheduler started (cron: %s, source: %s; fx refresh: %s)", cron, source,
+             settings.pw_fx_refresh_cron if settings.pw_fx_enabled else "disabled")
 
 
 def stop() -> None:

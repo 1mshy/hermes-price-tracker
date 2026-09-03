@@ -211,8 +211,14 @@ What a preference actually changes:
   loaded; `get_preferred_currency` and `engine_status` report the live value.
 
 Ordering across mixed currencies already used an indicative rate so a CA$96
-listing does not outrank a US$99 one. That has not changed — the rates are
-static and for ranking and orientation only, never for quoting.
+listing does not outrank a US$99 one. That rate is now the ECB reference
+rate, fetched keylessly from [Frankfurter](https://frankfurter.dev) every six
+hours (`PW_FX_REFRESH_CRON`) and cached in the settings table across
+restarts; when the provider is unreachable, or `PW_FX_ENABLED=false`, a static
+table in `fx.py` stands in. Every `approx_in_preferred` hint says which one it
+used (`rate_source`, `rate_as_of`), `get_exchange_rates` / `GET /api/fx`
+report the table in force and how old it is, and nothing about the rule has
+changed: rates are for ranking and orientation only, never for quoting.
 
 ## Alerts
 
@@ -446,6 +452,8 @@ curl -XPATCH localhost:8077/api/schedule -H 'Content-Type: application/json' \
 curl localhost:8077/api/locale
 curl -XPATCH localhost:8077/api/locale -H 'Content-Type: application/json' \
      -d '{"currency":"CAD"}'
+curl localhost:8077/api/fx                       # exchange rates in force, source and age
+curl -XPOST localhost:8077/api/fx/refresh
 ```
 
 Interactive docs at `localhost:8077/docs`.
@@ -545,10 +553,13 @@ Add one row to `pricewatch/src/pricewatch/stores/catalog.py`:
   Canada returns CAD. The currency is always reported alongside the price, and
   `PW_PREFERRED_CURRENCY` steers the engine at the storefront you actually buy
   from rather than leaving it to whatever IP the container has.
-- **Conversions are indicative, never quoted.** The rates in `money.py` are
-  static, hand-maintained approximations used for ranking mixed-currency results
-  and for the `approx_in_preferred` hint. They are not a rate of the day; no
-  tool ever reports a converted number as a store's price.
+- **Conversions are indicative, never quoted.** The rates behind mixed-currency
+  ranking and the `approx_in_preferred` hint are the ECB reference rate for the
+  day (via Frankfurter, refreshed every six hours, cached across restarts), with
+  the static table in `fx.py` as the fallback whenever that is unreachable. A
+  reference rate is not what any card or store will charge; every hint names
+  its source and day, `GET /api/fx` reports the table in force, and no tool
+  ever reports a converted number as a store's price.
 - **Scraping is best-effort.** Retailers change markup without warning. The
   verification harness is the tool for catching that — run it periodically.
 - Respect the retailers: the default sweep is every 30 minutes with per-host rate

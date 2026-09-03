@@ -52,6 +52,19 @@ class Settings(BaseSettings):
     # scheduling
     pw_check_cron: str = "*/30 * * * *"
 
+    # exchange rates — indicative only, for ordering mixed-currency results
+    # and the approx_in_preferred hint; a price is never converted for
+    # display. Frankfurter serves the ECB reference rate keylessly; when it
+    # is unreachable (or disabled) the static table in fx.py stands in.
+    pw_fx_enabled: bool = True
+    pw_fx_url: str = "https://api.frankfurter.dev/v1/latest"
+    #: The ECB publishes once a day; six-hourly catches it without leaning on
+    #: a free service. Anything under hourly is refused.
+    pw_fx_refresh_cron: str = "0 */6 * * *"
+    #: After this long without a successful refresh the rates are reported as
+    #: stale (they stay in use — a day-old ECB rate still beats the table).
+    pw_fx_stale_hours: float = 36
+
     # community intel: comma-separated default subreddits for community_pulse
     # (blank = the built-in 3D-printing/deal set)
     pw_community_subreddits: str = ""

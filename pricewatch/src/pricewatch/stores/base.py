@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from urllib.parse import urlsplit
 
-from .. import preferences
+from .. import fx, preferences
 from ..money import convert, currency_for_host, region_for_host
 
 
@@ -66,10 +66,19 @@ class StoreResult:
         amount = convert(self.price, self.currency, preferred)
         if amount is None:
             return None
+        rates = fx.status()
+        # Say where the rate came from: an ECB reference for a named day is a
+        # different claim from the hand-maintained fallback, and the agent
+        # relays this text when asked how the figure was arrived at.
+        origin = (f"indicative ECB reference rate for {rates['as_of']}"
+                  if rates["source"] == "live" else
+                  "indicative static fallback rate (live rates unavailable)")
         return {
             "currency": preferred,
             "amount": float(amount),
-            "basis": ("indicative rate, not a quote — report the price above in "
+            "rate_source": rates["source"],
+            "rate_as_of": rates["as_of"],
+            "basis": (f"{origin}, not a quote — report the price above in "
                       f"{self.currency} and present this only as an approximation"),
         }
 

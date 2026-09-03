@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 
+from . import fx
 from .money import REGION_CURRENCY, currency_for_region, region_for_currency
 from .settings import settings
 
@@ -99,6 +100,7 @@ def preferred_region() -> str:
 def current() -> dict:
     currency, region, source = _ensure()
     env_currency, env_region, _ = _from_env()
+    rates = fx.status()
     return {
         "preferred_currency": currency or None,
         "preferred_region": region or None,
@@ -106,6 +108,10 @@ def current() -> dict:
         "default_currency": env_currency or None,
         "default_region": env_region or None,
         "supported_currencies": list(SUPPORTED),
+        # Which day's rate stands behind any approx_in_preferred figure —
+        # None means the static fallback is in force (see get_exchange_rates).
+        "rates_as_of": rates["as_of"],
+        "rates_source": rates["source"],
         "note": (
             f"Quote prices in {currency} where the store bills in {currency}. "
             "Stores that bill in another currency keep their own figure — say "

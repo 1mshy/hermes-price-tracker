@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from decimal import Decimal, InvalidOperation
 
+from . import fx
+
 # Ordered: every qualified dollar sign ("CDN$", "CA$", "US$", "A$") is checked
 # before the bare "$", which is a substring of all of them — amazon.com shows a
 # Canadian visitor "CDN$ 138.83", and that is not USD.
@@ -86,38 +88,31 @@ def cents_to_decimal(cents) -> Decimal | None:
     return value if value > 0 else None
 
 
-# Indicative rates for ORDERING mixed-currency results only — never for
-# display. Close enough that a CAD 96 listing no longer outranks USD 99;
-# quoted prices always keep their original currency.
-_INDICATIVE_USD_RATE = {
-    "USD": Decimal("1"), "CAD": Decimal("0.73"), "EUR": Decimal("1.08"),
-    "GBP": Decimal("1.27"), "AUD": Decimal("0.65"), "JPY": Decimal("0.0066"),
-    "CHF": Decimal("1.12"), "SEK": Decimal("0.095"), "PLN": Decimal("0.25"),
-    "CZK": Decimal("0.043"),
-}
-
-
+# Indicative rates (fx.py: ECB reference when reachable, static table
+# otherwise) for ORDERING mixed-currency results only — never for display.
+# Close enough that a CAD 96 listing no longer outranks USD 99; quoted prices
+# always keep their original currency.
 def usd_sort_key(price: Decimal | None, currency: str | None) -> Decimal:
     """Approximate USD value for sorting; unknown currencies sort as-is."""
     if price is None:
         return Decimal("Infinity")
-    rate = _INDICATIVE_USD_RATE.get((currency or "USD").upper(), Decimal("1"))
-    return price * rate
+    rate = fx.rate_to_usd(currency)
+    return price * (rate if rate is not None else Decimal("1"))
 
 
 def convert(amount: Decimal | float | None, frm: str | None, to: str | None) -> Decimal | None:
     """Indicative cross-currency value — for orientation, never for quoting.
 
-    Same static rates as the sort key, so a Canadian shopper can see roughly
-    what a USD listing costs them without the engine ever passing the
-    converted number off as a real price. None when either side is unknown.
+    Same rates as the sort key, so a Canadian shopper can see roughly what a
+    USD listing costs them without the engine ever passing the converted
+    number off as a real price. None when either side is unknown.
     """
     if amount is None:
         return None
     frm, to = (frm or "USD").upper(), (to or "USD").upper()
     if frm == to:
         return Decimal(amount)
-    rate_from, rate_to = _INDICATIVE_USD_RATE.get(frm), _INDICATIVE_USD_RATE.get(to)
+    rate_from, rate_to = fx.rate_to_usd(frm), fx.rate_to_usd(to)
     if rate_from is None or rate_to is None:
         return None
     return (Decimal(amount) * rate_from / rate_to).quantize(Decimal("0.01"))

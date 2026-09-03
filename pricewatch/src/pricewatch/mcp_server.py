@@ -10,7 +10,7 @@ import logging
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
-from . import community, preferences, service
+from . import community, fx, preferences, service
 from . import scheduler as sweep_scheduler
 from .notify import Alert, channel_status, dispatch
 from .stores.registry import catalog_summary, fetch_offer
@@ -280,9 +280,27 @@ async def set_preferred_currency(currency: str, region: str = "") -> dict:
 
 @mcp.tool(
     description=(
-        "Report how the price engine is configured: scan schedule, browser fallback, and which "
-        "optional retailer API keys are present. Use it to explain why a particular store might "
-        "not be returning prices."
+        "Report the indicative exchange rates behind every `approx_in_preferred` figure: "
+        "`source` is 'live' (the ECB reference rate for the day in `as_of`, fetched from "
+        "Frankfurter at `fetched_at`) or 'static' (the built-in fallback table, used when "
+        "live rates are disabled or have never been reachable), `stale` is true when no "
+        "live rate has been fetched recently, and `rates` are USD per unit of each "
+        "currency. Call it to explain how an approximation was derived or when the user "
+        "asks how fresh the conversion is. These rates exist only for ordering results "
+        "and for that hint — never quote a converted figure as a store's price, and never "
+        "use one as an alert threshold."
+    )
+)
+async def get_exchange_rates() -> dict:
+    return fx.status()
+
+
+@mcp.tool(
+    description=(
+        "Report how the price engine is configured: scan schedule, browser fallback, which "
+        "optional retailer API keys are present, and the exchange rates in force for the "
+        "approx_in_preferred hint. Use it to explain why a particular store might not be "
+        "returning prices."
     )
 )
 async def engine_status() -> dict:
@@ -292,6 +310,7 @@ async def engine_status() -> dict:
         "sweep_schedule": schedule,
         "check_schedule_cron": schedule["cron"],
         "locale": preferences.current(),
+        "exchange_rates": fx.status(),
         "http_fingerprint": (settings.pw_impersonate if _CffiSession is not None else "unavailable"),
         "browser_fallback_enabled": settings.pw_browser_enabled,
         "residential_proxy_configured": bool(settings.pw_http_proxy),

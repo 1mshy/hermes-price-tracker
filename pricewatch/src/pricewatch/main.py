@@ -1,12 +1,13 @@
 """ASGI entrypoint: REST API + MCP server + scheduled price sweeps in one process."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from . import preferences, scheduler, service
+from . import fx, preferences, scheduler, service
 from .api import router
 from .db import init_db
 from .fetch import fetcher
@@ -29,16 +30,23 @@ async def lifespan(app: FastAPI):
     # possibly before the settings table existed. Re-read it now the schema is
     # there, so a saved override is live from the first request.
     preferences.reload()
+    fx.load()
     fixed = await service.backfill_tracker_currency()
     if fixed:
         log.info("gave %d pre-existing watch(es) the currency of their baseline listing", fixed)
     async with mcp.session_manager.run():
         scheduler.start()
+        # A fresh container (or one that slept past a refresh) should not wait
+        # for the next cron tick to stop ranking on the static table — but it
+        # must not hold up startup for a network call either.
+        warmup = asyncio.create_task(fx.refresh()) if fx.status()["stale"] else None
         log.info("pricewatch ready — REST on /api, MCP on /mcp (currency: %s)",
                  preferences.preferred_currency() or "as each store bills")
         try:
             yield
         finally:
+            if warmup is not None and not warmup.done():
+                warmup.cancel()
             scheduler.stop()
             await fetcher.aclose()
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import community, preferences, service
+from . import community, fx, preferences, service
 from . import scheduler as sweep_scheduler
 from .notify import Alert, channel_status, dispatch
 from .stores.registry import catalog_summary, fetch_offer
@@ -200,6 +200,16 @@ async def set_locale(body: LocaleIn) -> dict:
         return {"ok": True, **preferences.set_preference(body.currency, body.region)}
     except preferences.LocaleError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/fx")
+async def exchange_rates() -> dict:
+    return fx.status()
+
+
+@router.post("/fx/refresh")
+async def refresh_exchange_rates() -> dict:
+    return await fx.refresh()
 
 
 @router.post("/refresh")
