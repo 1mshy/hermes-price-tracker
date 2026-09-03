@@ -64,17 +64,42 @@ def parse_price(raw) -> Decimal | None:
     return value if value > 0 else None
 
 
-def detect_currency(text: str | None, default: str = "USD") -> str:
+_EXPLICIT_TOKENS = ("USD", "CAD", "EUR", "GBP", "JPY", "AUD", "CHF", "SEK", "PLN", "CZK")
+# Whole words only: the head of a .ca electronics page says "audio" and
+# "arcade" far more often than it names a currency.
+_ISO_CODE_RE = re.compile(r"\b(" + "|".join(_EXPLICIT_TOKENS) + r")\b")
+_EXPLICIT_SYMBOLS = {symbol: code for symbol, code in _CURRENCY_SYMBOLS.items()
+                     if symbol != "$" and symbol not in _EXPLICIT_TOKENS}
+
+
+def currency_from_text(text: str | None, host: str | None = None, default: str = "USD") -> str:
+    """Which money a price string is in — explicit marks win, a bare `$` is
+    the host's own dollar.
+
+    newegg.ca prints "$88.41" and means CAD; newegg.com prints the same and
+    means USD. The glyph alone says nothing, so it resolves to whatever the
+    storefront's hostname bills in (.ca → CAD, .com.au → AUD) and only to
+    `default` when there is no host to ask. "US$", "CDN$", "C$", "A$" and
+    ISO codes (as whole words) are explicit and are believed wherever they
+    appear.
+    """
     if not text:
         return default
-    upper = str(text).upper()
-    for token in ("USD", "CAD", "EUR", "GBP", "JPY", "AUD", "CHF", "SEK", "PLN", "CZK"):
-        if token in upper:
-            return token
-    for symbol, code in _CURRENCY_SYMBOLS.items():
-        if symbol in str(text):
+    raw = str(text)
+    match = _ISO_CODE_RE.search(raw.upper())
+    if match:
+        return match.group(1)
+    for symbol, code in _EXPLICIT_SYMBOLS.items():
+        if symbol in raw:
             return code
+    if "$" in raw and host:
+        return currency_for_host(host, "") or default
     return default
+
+
+def detect_currency(text: str | None, default: str = "USD", host: str | None = None) -> str:
+    """Older spelling of `currency_from_text`; a bare `$` is `default` unless a host is given."""
+    return currency_from_text(text, host, default)
 
 
 def cents_to_decimal(cents) -> Decimal | None:

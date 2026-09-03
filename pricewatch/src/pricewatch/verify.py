@@ -37,8 +37,16 @@ PRODUCT_PATTERNS: dict[str, str] = {
     "digikey": r"/en/products/detail/[^\s\"']+",
     "mouser": r"/ProductDetail/[^\s\"']+",
     "3djake": r"/[a-z0-9\-]+/[a-z0-9\-]+",
+    "bestbuyca": r"/product/[^\s\"']+/\d{8}",
+    "canadacomputers": r"/en/[^\s\"']+/\d+/[^\s\"']+\.html",
+    "memoryexpress": r"/Products/MX\d+",
 }
 GENERIC_PATTERN = r"/(?:products?|item|p|dp)/[A-Za-z0-9][^\s\"'<>]{3,80}"
+
+
+class _Walled(Exception):
+    """Discovery met a bot wall no permitted rung could clear — the store is
+    not "without products", it is unreachable from here."""
 
 
 def _root(url: str) -> str:
@@ -97,6 +105,8 @@ async def _from_homepage(host: str, key: str, allow_browser: bool) -> str | None
             page = await fetcher.render(home)
         except Exception:
             return None
+    if page.looks_blocked:
+        raise _Walled(f"{home} answered a bot challenge")
 
     root = _root(page.url)
     for match in re.finditer(rf'href=["\']([^"\']*{pattern}[^"\']*)["\']', page.text):
@@ -129,7 +139,11 @@ async def discover_product_url(entry: dict, allow_browser: bool) -> tuple[str | 
         found = await finder(host)
         if found:
             return found, label
-    found = await _from_homepage(host, entry["key"], allow_browser)
+    walled = False
+    try:
+        found = await _from_homepage(host, entry["key"], allow_browser)
+    except _Walled:
+        walled, found = True, None
     if found:
         return found, "homepage-scrape"
     # Last resort: a searchable store can name its own product page (works for
@@ -142,12 +156,12 @@ async def discover_product_url(entry: dict, allow_browser: bool) -> tuple[str | 
                 return hits[0].url, "adapter-search"
         except Exception:
             pass
-    return None, "not-found"
+    return None, ("blocked" if walled else "not-found")
 
 
-def _classify(result, url: str | None) -> str:
+def _classify(result, url: str | None, how: str = "") -> str:
     if url is None:
-        return "NO-URL"
+        return "BLOCKED" if how == "blocked" else "NO-URL"
     if result is None:
         return "ERROR"
     if result.ok:
@@ -180,7 +194,7 @@ async def verify_store(entry: dict, allow_browser: bool, timeout: float) -> dict
                 "error": f"{type(exc).__name__}: {exc}"[:160],
                 "seconds": round(time.monotonic() - started, 1)}
 
-    status = _classify(result, url)
+    status = _classify(result, url, how)
     return {
         "key": entry["key"], "label": entry["label"], "kind": entry["kind"],
         "tags": entry["tags"], "status": status, "url": url, "discovery": how,
@@ -217,16 +231,19 @@ async def run(tags: list[str] | None, only: list[str] | None, allow_browser: boo
 
 def render_table(rows: list[dict]) -> str:
     lines = [
-        f"{'':2} {'STORE':<22} {'CATEGORY':<12} {'STATUS':<10} {'PRICE':>10}  {'METHOD':<22} NOTE",
-        "─" * 118,
+        f"{'':2} {'STORE':<22} {'CATEGORY':<12} {'STATUS':<10} {'PRICE':>14}  {'METHOD':<22} NOTE",
+        "─" * 122,
     ]
     order = {"OK": 0, "LIMITED": 0.5, "NEEDS-KEY": 1, "BLOCKED": 2, "FAIL": 3, "TIMEOUT": 4, "ERROR": 5, "NO-URL": 6}
     for row in sorted(rows, key=lambda r: (order.get(r["status"], 9), r["key"])):
-        price = f"{row['price']:,.2f}" if row.get("price") is not None else "—"
+        # The currency is the half of a price that goes wrong silently, so
+        # it is printed with the figure rather than hidden in the JSON.
+        price = (f"{row['price']:,.2f} {row.get('currency') or ''}".strip()
+                 if row.get("price") is not None else "—")
         note = row.get("error") or (row.get("title") or "")
         lines.append(
             f"{ICONS.get(row['status'], '?'):2} {row['label']:<22.22} "
-            f"{','.join(row['tags']):<12.12} {row['status']:<10} {price:>10}  "
+            f"{','.join(row['tags']):<12.12} {row['status']:<10} {price:>14}  "
             f"{(row.get('method') or '—'):<22.22} {note[:38]}"
         )
     counts: dict[str, int] = {}
@@ -234,7 +251,7 @@ def render_table(rows: list[dict]) -> str:
         counts[row["status"]] = counts.get(row["status"], 0) + 1
     summary = "  ".join(f"{ICONS.get(k, '?')} {k}={v}" for k, v in sorted(counts.items()))
     ok = counts.get("OK", 0)
-    lines += ["─" * 118, f"{ok}/{len(rows)} stores returned a live price.   {summary}"]
+    lines += ["─" * 122, f"{ok}/{len(rows)} stores returned a live price.   {summary}"]
     return "\n".join(lines)
 
 

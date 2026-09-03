@@ -137,6 +137,13 @@ class StoreAdapter:
         """
         return None
 
+    def can_search(self) -> bool:
+        """Whether `search` does anything for the current shopper. The default
+        is "the subclass overrides it"; an adapter whose search depends on the
+        storefront in play (Shopify in Canada, none in the US) says so here so
+        list_stores does not advertise a search that returns nothing."""
+        return type(self).search is not StoreAdapter.search
+
     async def fetch_offer(self, url: str) -> StoreResult:      # pragma: no cover - interface
         raise NotImplementedError
 

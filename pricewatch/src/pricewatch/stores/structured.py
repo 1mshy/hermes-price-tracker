@@ -16,12 +16,16 @@ class StructuredAdapter(StoreAdapter):
     name = "structured"
 
     def __init__(self, name: str | None = None, domains: tuple[str, ...] = (),
-                 wait_for: str | None = None, force_browser: bool = False):
+                 wait_for: str | None = None, force_browser: bool = False,
+                 currency: str | None = None):
         if name:
             self.name = name
         self.domains = domains
         self.wait_for = wait_for
         self.force_browser = force_browser
+        #: what the store bills in when its hostname lies about it (a .com in
+        #: Canada); None trusts the domain.
+        self.currency = currency
 
     def matches(self, url: str) -> bool:
         return super().matches(url) if self.domains else False
@@ -41,15 +45,16 @@ class StructuredAdapter(StoreAdapter):
 
         # A storefront that prints a bare number is quoting its own market's
         # money, not ours — fall back to the domain's currency before the
-        # global default.
-        fallback = currency_for_host(host_of(page.url), settings.pw_currency)
-        found = extract(page.text, default_currency=fallback)
+        # global default, unless the catalog says the domain lies.
+        host = None if self.currency else host_of(page.url)
+        fallback = self.currency or currency_for_host(host, settings.pw_currency)
+        found = extract(page.text, default_currency=fallback, host=host)
         if not found.ok:
             # One escalation: the price may only exist after JS runs.
             if page.method == "http" and settings.pw_browser_enabled:
                 try:
                     page = await fetcher.render(url, wait_for=self.wait_for)
-                    found = extract(page.text, default_currency=fallback)
+                    found = extract(page.text, default_currency=fallback, host=host)
                 except Exception:
                     pass
         if not found.ok:

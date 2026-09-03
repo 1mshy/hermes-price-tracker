@@ -16,7 +16,8 @@ from lxml import html as lxml_html
 from .. import matching, preferences
 from ..extract import extract
 from ..fetch import Blocked, fetcher
-from ..money import currency_for_host, detect_currency, parse_price, region_for_host
+from ..money import (currency_for_host, currency_from_text, detect_currency, parse_price,
+                     region_for_host)
 from ..settings import settings
 from .apis import KeepaAmazon
 from .base import StoreAdapter, StoreResult, host_of
@@ -307,7 +308,7 @@ class AmazonAdapter(StoreAdapter):
 
 class WalmartAdapter(StoreAdapter):
     name = "walmart"
-    domains = ("walmart.com",)
+    domains = ("walmart.com", "walmart.ca")
 
     async def fetch_offer(self, url: str) -> StoreResult:
         # A fingerprinted GET returns Walmart's full PDP (with __NEXT_DATA__) in
@@ -320,6 +321,10 @@ class WalmartAdapter(StoreAdapter):
         except Exception as exc:
             return StoreResult(store=self.name, url=url, error=f"render failed: {exc}")
 
+        # walmart.ca is the same Next.js PDP billing CAD; when the payload
+        # omits the currency the domain is the answer, not USD.
+        host = host_of(page.url)
+        native = currency_for_host(host, settings.pw_currency)
         # Walmart ships the whole PDP state in __NEXT_DATA__.
         match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', page.text, re.S)
         if match:
@@ -332,17 +337,17 @@ class WalmartAdapter(StoreAdapter):
                 if price:
                     return StoreResult(
                         store=self.name, url=page.url, title=product.get("name"),
-                        price=price, currency=current.get("currencyUnit", "USD"),
+                        price=price, currency=current.get("currencyUnit") or native,
                         in_stock=(product.get("availabilityStatus") == "IN_STOCK"),
                         sku=str(product.get("usItemId") or ""), method=f"{page.method}:next-data",
                     )
             except Exception:
                 pass
 
-        found = extract(page.text, default_currency=settings.pw_currency)
+        found = extract(page.text, default_currency=native, host=host)
         if found.ok:
             return StoreResult(store=self.name, url=page.url, title=found.title, price=found.price,
-                               currency=found.currency or "USD", in_stock=found.in_stock,
+                               currency=found.currency or native, in_stock=found.in_stock,
                                method=f"{page.method}:{found.method}")
         reason = "bot challenge" if page.looks_blocked else "no price in page"
         return StoreResult(store=self.name, url=url, method="browser:failed", error=reason)
@@ -400,11 +405,17 @@ class SelectorAdapter(StoreAdapter):
             if price:
                 break
 
+        # A bare "$" on newegg.ca is CAD: the hostname decides what the
+        # glyph means, both for the selector hit and the structured fallback —
+        # and a price node with no glyph at all (themes often put the "$" in
+        # a sibling span) is the host's money too, not the global default.
+        host = host_of(page.url)
+        native = currency_for_host(host, settings.pw_currency)
         if price is None:
-            found = extract(page.text, default_currency=settings.pw_currency)
+            found = extract(page.text, default_currency=native, host=host)
             if found.ok:
                 return StoreResult(store=self.name, url=page.url, title=found.title,
-                                   price=found.price, currency=found.currency or "USD",
+                                   price=found.price, currency=found.currency or native,
                                    in_stock=found.in_stock, method=f"{page.method}:{found.method}")
             return StoreResult(store=self.name, url=url, method=f"{page.method}:failed",
                                error="no price matched selectors or structured data")
@@ -426,5 +437,5 @@ class SelectorAdapter(StoreAdapter):
                 in_stock = not any(word in blob for word in self.out_of_stock_words)
 
         return StoreResult(store=self.name, url=page.url, title=title, price=price,
-                           currency=detect_currency(price_text, settings.pw_currency),
+                           currency=currency_from_text(price_text, host, native),
                            in_stock=in_stock, sku=None, method=f"{page.method}:selector")

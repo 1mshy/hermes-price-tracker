@@ -8,7 +8,7 @@ or WhatsApp when something gets cheap.
 ```
 ┌────────────┐   MCP over HTTP    ┌─────────────────────────────┐
 │  hermes    │ ─────────────────► │  pricewatch                 │
-│  (agent)   │                    │  • 39 store adapters        │
+│  (agent)   │                    │  • 48 store adapters        │
 └─────┬──────┘                    │  • price history (SQLite)   │
       │ OpenAI API                │  • scheduled sweeps         │
       ▼                           │  • alert rules              │
@@ -98,14 +98,16 @@ docker compose restart hermes         # pick up .env changes
 ## What actually works
 
 Verified live against every store in the catalog (`docker compose exec pricewatch
-python -m pricewatch.verify`). Latest run (2026-08-27): **27 of 39 stores returned a live price** (the rest: 4 documented IP-reputation walls, 1 keyless API, 1 search-only marketplace, and stores with no machine-readable price).
+python -m pricewatch.verify`). Latest full run (2026-08-27): **27 of 39 stores returned a live price** (the rest: 4 documented IP-reputation walls, 1 keyless API, 1 search-only marketplace, and stores with no machine-readable price). The nine Canadian stores added on 2026-09-03 were verified separately: 8 of 9 read a live CAD price (Memory Express is IP-walled), for 48 stores in the catalog.
 
-**Working without any API key (22 of them 3D printing):**
+**Working without any API key (30 of them 3D printing):**
 
 | | |
 |---|---|
-| **Shopify JSON** (exact price, in-stock, variants) | Elegoo · Anycubic · Printed Solid · E3D · Slice Engineering · Micro Swiss · West3D · Fabreeko · Filastruder · QIDI · Sovol · Polymaker · Proto-pasta · Atomic Filament · Overture · Fillamentum |
+| **Shopify JSON** (exact price, in-stock, variants) | Elegoo · Anycubic · Printed Solid · E3D · Slice Engineering · Micro Swiss · West3D · Fabreeko · Filastruder · QIDI · Sovol · Polymaker · Proto-pasta · Atomic Filament · Overture · Fillamentum · **Voxel Factory · 3D Printing Canada · Filaments.ca · DigitMakers · Shop3D.ca** (all CAD) · Creality's `ca.` market |
 | **schema.org JSON-LD over fingerprinted HTTP** | Bambu Lab · Prusa · Creality · B&H Photo · DigiKey |
+| **Keyless retailer JSON API** (bestbuy.ca is a different platform from bestbuy.com) | Best Buy Canada — exact price, stock, sale end date, third-party sellers flagged `marketplace` |
+| **schema.org JSON-LD over plain HTTP** (PrestaShop / BigCommerce, CAD) | Canada Computers (product pages + parsed search cards) · Spool3D |
 | **Fingerprinted HTTP + DOM/buy-box** | Amazon · Walmart · Newegg · 3DJake |
 | **Headless browser + JSON-LD** | MatterHackers · TH3D |
 
@@ -129,7 +131,7 @@ and the tools say so instead of failing silently.
 `KEEPA_API_KEY` makes Amazon bulletproof but is no longer required for everyday
 lookups.
 
-**Still IP-walled** — Micro Center, Adorama, Mouser, Target key on IP reputation
+**Still IP-walled** — Micro Center, Adorama, Mouser, Target, Memory Express key on IP reputation
 and reject even a real browser from a datacenter address. Point `PW_HTTP_PROXY`
 at a residential proxy; the adapters use it the moment it is configured, and until
 then they fail fast with a clear reason instead of stalling on Chromium.
@@ -219,6 +221,21 @@ table in `fx.py` stands in. Every `approx_in_preferred` hint says which one it
 used (`rate_source`, `rate_as_of`), `get_exchange_rates` / `GET /api/fx`
 report the table in force and how old it is, and nothing about the rule has
 changed: rates are for ranking and orientation only, never for quoting.
+
+**Canadian storefronts.** For a CAD shopper the catalog is no longer a list of
+American shops with a conversion beside each price. The engine searches the
+OEMs' own `ca.` markets natively — `ca.store.creality.com`, `ca.elegoo.com`,
+`ca.anycubic.com`, `ca.qidi3d.com` — reads `ca.store.bambulab.com` product
+pages (Bambu Lab publishes no search), and searches the Canadian retailers
+that actually stock 3D-printing and tech gear: Voxel Factory (Montreal), 3D
+Printing Canada, Filaments.ca, DigitMakers, Shop3D.ca, Spool3D, Best Buy
+Canada (keyless JSON API; `marketplace` listings are third-party sellers, and
+a watch created from a description never baselines on one, the same way it
+skips refurbs) and Canada Computers, plus walmart.ca and newegg.ca product
+pages. A bare `$` on a `.ca` page is read as CAD, not USD. Every store carries
+a `country` — the market its primary storefront sells in — in `list_stores` /
+`GET /api/stores`, and `compare_prices` / `POST /api/compare` accept
+`country: "CA"` as the shortcut for "only the stores that sell in my market".
 
 ## Alerts
 
@@ -544,7 +561,15 @@ Add one row to `pricewatch/src/pricewatch/stores/catalog.py`:
 ```
 
 `kind` is `shopify`, `woo`, `structured`, `browser`, `selector`, or `api`. For
-`selector`, add XPaths to `SELECTOR_RULES` in `stores/registry.py`. Then verify it:
+`selector`, add XPaths to `SELECTOR_RULES` in `stores/registry.py`. `country`
+defaults from the primary domain's TLD — set it explicitly where the TLD lies
+(a Montreal shop on a `.com`): a `structured`/`browser` store then reads a
+bare `$` as that country's dollar (Shopify stores ask `/cart.js` regardless).
+When country and hostname both mislead (Prusa is Czech; its `.com` quotes
+USD), set `currency` to what a bare number means there. Regional storefronts
+go after the primary in `domains` so `storefront()` can pick them for a
+shopper in that market; a structured store whose regional market runs on
+Shopify lists it under `shopify_markets`. Then verify it:
 `python -m pricewatch.verify --store mystore`.
 
 ## Notes and caveats
@@ -563,7 +588,7 @@ Add one row to `pricewatch/src/pricewatch/stores/catalog.py`:
 - **Scraping is best-effort.** Retailers change markup without warning. The
   verification harness is the tool for catching that — run it periodically.
 - Respect the retailers: the default sweep is every 30 minutes with per-host rate
-  limiting. Turning `PW_CHECK_CRON` down to the minute across 38 stores is both
+  limiting. Turning `PW_CHECK_CRON` down to the minute across 48 stores is both
   rude and a good way to get blocked.
 - `PW_BROWSER_ENABLED=false` disables Chromium entirely if you want a lighter,
-  HTTP-only deployment — you keep every Shopify/JSON-LD store (22 of the 25).
+  HTTP-only deployment — you keep every Shopify/JSON-LD store (31 of the 48).

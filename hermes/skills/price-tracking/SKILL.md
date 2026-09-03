@@ -2,7 +2,7 @@
 name: price-tracking
 description: Research prices across tech and 3D-printing retailers, check Reddit deal chatter, and set up price-drop alerts and scheduled checks. Use whenever the user asks what something costs, where it is cheapest, whether a deal is good, mentions a price seen on Reddit, asks to be told when a price falls, or wants to know when something is back in stock.
 metadata:
-  version: 1.5.0
+  version: 1.6.0
 ---
 
 # Price research and tracking
@@ -15,7 +15,7 @@ returns, with the store name and URL beside every figure.
 
 | The user wants | Call |
 | --- | --- |
-| "What does X cost?" / "Where is X cheapest?" | `compare_prices` |
+| "What does X cost?" / "Where is X cheapest?" | `compare_prices` (`country: "CA"` = only stores selling in Canada) |
 | A price for one specific page they linked | `get_price` |
 | "Tell me when this link drops below $N" | `track_product_url` |
 | "Watch X everywhere and alert me" | `track_product_description` |
@@ -29,6 +29,7 @@ returns, with the store name and URL beside every figure.
 | "Quote me in CAD from now on" | `set_preferred_currency` |
 | "What currency am I set to?" | `get_preferred_currency` |
 | "How fresh is that conversion?" / "Where did that ≈ figure come from?" | `get_exchange_rates` |
+| "Which stores sell in my country?" / picking `stores` keys | `list_stores` (each store carries `country`) |
 
 ## Identifying the product precisely
 
@@ -65,6 +66,22 @@ When one is set:
   amazon.ca rather than amazon.com for a Canadian shopper. The engine already
   searches the regional site where a store runs one, so those results come back
   natively in the right currency.
+- **Canadian stores exist — use them first for a CAD shopper.** `list_stores`
+  reports a `country` for every store; lead with the `country: CA` ones, and
+  pass `country: "CA"` to `compare_prices` when the user wants Canadian prices
+  only (an explicit `stores` list wins over it). They are
+  Best Buy Canada (`bestbuyca`), Canada Computers (`canadacomputers`), Voxel
+  Factory (`voxelfactory`, Montreal), 3D Printing Canada (`3dprintingcanada`),
+  Filaments.ca (`filamentsca`), DigitMakers (`digitmakers`), Shop3D.ca
+  (`shop3d`) and Spool3D (`spool3d`); Memory Express is catalogued but
+  IP-walled. The OEMs' `ca.` storefronts (Bambu Lab, Creality, Elegoo, Anycubic,
+  QIDI) and walmart.ca / newegg.ca product pages are read in CAD as well.
+  A Best Buy Canada result whose `extra.marketplace` is true is a third-party
+  seller on bestbuy.ca (the `note` and `seller` say who), not Best Buy's own
+  stock: say so when quoting it, and prefer a first-party listing for a watch —
+  `track_product_description` already skips marketplace hits for its baseline
+  (as it skips refurbs), and `track_product_url` on a marketplace page says so
+  in its `note`.
 - **Never convert a price yourself.** Quote each store's real figure in the
   currency that store charges, and name the currency whenever it is not the
   user's.
@@ -193,11 +210,12 @@ figure out how to reach a store — just call the tool once and read the result.
 
 What this means when a read fails:
 
-- **Micro Center, Adorama, Mouser, Target** need a residential proxy
-  (`PW_HTTP_PROXY`) or an official API — retrying won't help. Report the store as
-  blocked and move on; don't loop on it.
-- **Best Buy** and **eBay** are most reliable with their free API keys; without
-  them coverage is partial.
+- **Micro Center, Adorama, Mouser, Target, Memory Express** need a residential
+  proxy (`PW_HTTP_PROXY`) or an official API — retrying won't help. Report the
+  store as blocked and move on; don't loop on it.
+- **Best Buy (bestbuy.com)** and **eBay** are most reliable with their free API
+  keys; without them coverage is partial. **Best Buy Canada** (`bestbuyca`) is
+  keyless — for a CAD shopper use it instead.
 - **Amazon** reads over HTTP now; `KEEPA_API_KEY` is only needed for hardened
   pages or heavy use, not the common case.
 

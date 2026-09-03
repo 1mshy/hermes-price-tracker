@@ -36,6 +36,7 @@ class CompareIn(BaseModel):
     query: str
     stores: list[str] | None = None
     limit_per_store: int = 3
+    country: str | None = None
 
 
 class CarSearchIn(BaseModel):
@@ -86,7 +87,7 @@ async def price(url: str = Query(..., description="full product URL")) -> dict:
 @router.post("/compare")
 async def compare(body: CompareIn) -> dict:
     return await service.compare(body.query, stores=body.stores,
-                                 limit_per_store=body.limit_per_store)
+                                 limit_per_store=body.limit_per_store, country=body.country)
 
 
 @router.get("/trackers")

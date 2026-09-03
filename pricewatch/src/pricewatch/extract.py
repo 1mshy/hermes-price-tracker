@@ -13,7 +13,7 @@ from decimal import Decimal
 
 from lxml import html as lxml_html
 
-from .money import detect_currency, parse_price
+from .money import currency_from_text, detect_currency, parse_price
 
 _JSONLD_XPATH = "//script[@type='application/ld+json']/text()"
 
@@ -227,7 +227,10 @@ def from_price_amount(page_text: str) -> Extracted:
                      method="price-amount")
 
 
-def extract(page_text: str, *, default_currency: str = "USD") -> Extracted:
+def extract(page_text: str, *, default_currency: str = "USD",
+            host: str | None = None) -> Extracted:
+    """`host` is the storefront the page came from: a bare `$` in the markup
+    then means that host's dollar (newegg.ca → CAD) instead of USD."""
     try:
         doc = lxml_html.fromstring(page_text)
     except Exception:
@@ -236,7 +239,7 @@ def extract(page_text: str, *, default_currency: str = "USD") -> Extracted:
     for reader in (from_jsonld, from_microdata, from_meta):
         found = reader(doc)
         if found.ok:
-            found.currency = found.currency or detect_currency(page_text[:4000], default_currency)
+            found.currency = found.currency or currency_from_text(page_text[:4000], host, default_currency)
             if found.title:
                 found.title = re.sub(r"\s+", " ", found.title).strip()[:400]
             return found
@@ -246,6 +249,6 @@ def extract(page_text: str, *, default_currency: str = "USD") -> Extracted:
         if found.ok:
             titles = doc.xpath("//title//text()") or doc.xpath("//h1//text()")
             found.title = re.sub(r"\s+", " ", " ".join(titles)).strip()[:400] or None
-            found.currency = found.currency or detect_currency(page_text[:4000], default_currency)
+            found.currency = found.currency or currency_from_text(page_text[:4000], host, default_currency)
             return found
     return found

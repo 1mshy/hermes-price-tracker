@@ -15,6 +15,7 @@ from .models import AlertEvent, Offer, PricePoint, Product, Tracker, utcnow
 from .money import fmt, usd_sort_key
 from .notify import Alert, dispatch
 from .stores.base import StoreResult, host_of
+from .stores.catalog import keys_for_country
 from .stores.registry import ADAPTERS, fetch_offer, resolve, search_stores, store_key_for_url
 
 log = logging.getLogger(__name__)
@@ -103,6 +104,11 @@ async def track_url(url: str, *, target_price: float | None = None, drop_pct: fl
     if not result.ok:
         return {"ok": False, "error": result.error or "could not read a price", "url": url,
                 "store": result.store, "method": result.method}
+    if result.extra.get("marketplace"):
+        # The watch follows that seller's price, not the retailer's own — worth
+        # saying at registration, not only in the search hit it came from.
+        note = "; ".join(filter(None, (
+            note, result.extra.get("note") or "third-party marketplace listing")))
 
     def write(session: Session) -> dict:
         product = Product(
@@ -160,8 +166,11 @@ async def track_query(description: str, *, stores: list[str] | None = None,
     # the `min` below — and that pick is permanent: it sets the baseline every
     # later drop is measured against, names the product, and becomes the
     # cheapest offer the sweep re-reads. One refurb here quietly turns the whole
-    # tracker into a refurb tracker. Kept only when that is all there is.
-    as_new = [r for r in trackable if not r.extra.get("condition")]
+    # tracker into a refurb tracker; a third-party marketplace seller (bestbuy.ca
+    # flags them) does the same with somebody else's price. Kept only when that
+    # is all there is.
+    as_new = [r for r in trackable
+              if not r.extra.get("condition") and not r.extra.get("marketplace")]
     keep = (as_new or trackable)[:max_offers]
     if not keep:
         return {"ok": False,
@@ -743,8 +752,19 @@ async def delete_tracker(tracker_id: int) -> dict:
 
 
 async def compare(query: str, stores: list[str] | None = None, limit_per_store: int = 3,
-                  threshold: float = 65.0) -> dict:
-    """One-shot price comparison — no tracking, just what it costs right now."""
+                  threshold: float = 65.0, country: str | None = None) -> dict:
+    """One-shot price comparison — no tracking, just what it costs right now.
+
+    `country` is the shortcut for "only my own market": without an explicit
+    `stores` list it expands to every catalogued store selling there, so a CAD
+    shopper is not handed eight American stores and a conversion each.
+    """
+    if country and not stores:
+        stores = keys_for_country(country)
+        if not stores:
+            return {"query": query, "count": 0, "results": [], "stores_searched": [],
+                    "note": f"no catalogued store sells in {country.strip().upper()} — "
+                            "list_stores shows each store's country"}
     ranked, _, query_used = await _search_ranked(
         query, stores=stores, limit_per_store=limit_per_store, threshold=threshold)
     preferred = preferences.preferred_currency()

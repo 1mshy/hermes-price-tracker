@@ -79,6 +79,98 @@ class BestBuyAdapter(StoreAdapter):
         ]
 
 
+_BBCA_API = "https://www.bestbuy.ca/api/v2/json"
+_BBCA_HEADERS = {"Accept": "application/json", "Accept-Language": "en-CA,en;q=0.9"}
+
+
+class BestBuyCanadaAdapter(StoreAdapter):
+    """bestbuy.ca — a different platform from bestbuy.com, with a public JSON
+    API that needs no key and bills in CAD.
+
+    Marketplace listings are third-party sellers under the Best Buy banner;
+    they are flagged in `extra` the way Amazon flags `condition`, so the
+    tracker and the agent can treat them with care rather than as Best Buy's
+    own price.
+    """
+
+    name = "bestbuyca"
+    domains = ("bestbuy.ca",)
+
+    @staticmethod
+    def _sku(url: str) -> str | None:
+        # /en-ca/product/<slug>/<sku> — or /fr-ca/produit/… — plus ?sku= / skuId=.
+        match = re.search(r"/produ(?:ct|it)/(?:[^/?#]+/)*(\d{8})(?=[/?#]|$)|[?&]sku(?:Id)?=(\d{8})\b", url)
+        return next((g for g in (match.groups() if match else []) if g), None)
+
+    def _result(self, item: dict, url: str, detailed: bool) -> StoreResult:
+        sku = str(item.get("sku") or "") or None
+        link = item.get("productUrl") or url
+        if not link and sku:
+            # The site resolves a product by its SKU whatever the slug says.
+            link = f"/en-ca/product/{item.get('seoText') or 'p'}/{sku}"
+        if link.startswith("/"):
+            link = "https://www.bestbuy.ca" + link
+        availability = item.get("availability") if detailed else None
+        in_stock = None
+        if isinstance(availability, dict) and availability:
+            in_stock = bool(availability.get("isAvailableOnline")) \
+                or availability.get("onlineAvailability") == "InStock"
+        marketplace = item.get("isMarketplace") is True
+        seller = item.get("seller")
+        if isinstance(seller, dict):
+            seller = seller.get("name")
+        sale, regular = parse_price(item.get("salePrice")), parse_price(item.get("regularPrice"))
+        on_sale = bool(item.get("isOnSale") or item.get("isProductOnSale")
+                       or (sale is not None and regular is not None and sale < regular))
+        extra = {
+            "regular_price": float(regular) if regular is not None else None,
+            "on_sale": on_sale,
+            "sale_ends": item.get("saleEndDate") or item.get("SaleEndDate"),
+            "marketplace": marketplace,
+            "seller": seller if marketplace else None,
+        }
+        if marketplace:
+            extra["note"] = ("marketplace listing — sold and shipped by a third-party seller"
+                             + (f" ({seller})" if seller else "")
+                             + " on bestbuy.ca, not by Best Buy; returns and stock are theirs")
+        return StoreResult(
+            store=self.name, url=link, title=item.get("name"), price=sale, currency="CAD",
+            in_stock=in_stock, sku=sku, method="bestbuyca-api", extra=extra,
+        )
+
+    async def fetch_offer(self, url: str) -> StoreResult:
+        sku = self._sku(url)
+        if not sku:
+            return StoreResult(store=self.name, url=url, error="no SKU in Best Buy Canada URL")
+        try:
+            data = await fetcher.get_json(f"{_BBCA_API}/product/{sku}?lang=en", headers=_BBCA_HEADERS)
+        except Exception as exc:
+            if "HTTP 404" in str(exc):
+                return StoreResult(store=self.name, url=url, method="bestbuyca-api",
+                                   error=f"SKU {sku} not found at bestbuy.ca (HTTP 404)")
+            return StoreResult(store=self.name, url=url, error=f"bestbuy.ca api: {exc}")
+        if not isinstance(data, dict) or not data.get("sku"):
+            return StoreResult(store=self.name, url=url, method="bestbuyca-api",
+                               error="SKU not found at bestbuy.ca")
+        result = self._result(data, url, detailed=True)
+        if result.price is None:
+            # No salePrice means sold out, "see price in cart" or a delisted
+            # marketplace offer — a sweep must record why, not a bare failure.
+            result.error = (f"bestbuy.ca publishes no price for SKU {sku} "
+                            "(sold out or see price in cart)")
+        return result
+
+    async def search(self, query: str, limit: int = 5) -> list[StoreResult]:
+        endpoint = f"{_BBCA_API}/search?query={quote(query)}&lang=en&pageSize={max(limit, 1)}"
+        try:
+            data = await fetcher.get_json(endpoint, headers=_BBCA_HEADERS)
+        except Exception:
+            return []
+        items = data.get("products") if isinstance(data, dict) else None
+        results = [self._result(item, "", detailed=False) for item in (items or [])[:limit]]
+        return [r for r in results if r.url]         # nothing to track without a URL
+
+
 class EbayAdapter(StoreAdapter):
     """eBay Browse API (client-credentials OAuth)."""
 

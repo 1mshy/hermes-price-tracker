@@ -61,7 +61,11 @@ mcp = MCPServer("hermes-shopping", instructions=_instructions())
         "Look up the current price of one specific product page. Give the full product URL. "
         "Works for Amazon, Best Buy, Walmart, Newegg, Micro Center, B&H, and 3D-printing "
         "stores (Bambu Lab, Prusa, Elegoo, Creality, Anycubic, Polymaker, E3D, MatterHackers "
-        "and many more). Returns price, currency, stock status and how the price was read."
+        "and many more), including the Canadian retailers — bestbuy.ca (a different "
+        "platform from bestbuy.com, no key needed), Canada Computers, Spool3D, walmart.ca, "
+        "newegg.ca — and the OEMs' ca. storefronts. Prices come back in the store's own "
+        "currency (CAD for those). Returns price, currency, stock status and how the price "
+        "was read; `extra.marketplace` true means a third-party seller, not the retailer."
     )
 )
 async def get_price(url: str) -> dict:
@@ -74,13 +78,17 @@ async def get_price(url: str) -> dict:
         "Search many stores at once for a product and return the current prices, cheapest "
         "first. Pass a specific, detailed description or exact product title (e.g. "
         "'Bambu Lab P1S Combo with AMS' or 'Polymaker PolyTerra PLA 1kg matte black'). "
-        "Optionally restrict to specific stores by their keys (see list_stores). "
+        "Optionally restrict to specific stores by their keys (see list_stores), or pass "
+        "country (ISO code, e.g. 'CA') to search only the stores that sell in the user's "
+        "own market — the shortcut for a CAD shopper who wants Canadian prices; an "
+        "explicit stores list wins over country. "
         "This does NOT set up tracking — use the track_* tools for that."
     )
 )
 async def compare_prices(query: str, stores: list[str] | None = None,
-                         limit_per_store: int = 3) -> dict:
-    return await service.compare(query, stores=stores, limit_per_store=limit_per_store)
+                         limit_per_store: int = 3, country: str | None = None) -> dict:
+    return await service.compare(query, stores=stores, limit_per_store=limit_per_store,
+                                 country=country)
 
 
 @mcp.tool(
@@ -223,7 +231,10 @@ async def refresh_prices_now() -> dict:
 @mcp.tool(
     description=(
         "List every store the system can read prices from, with its key (for the `stores` "
-        "argument elsewhere), the retail category it covers, and the extraction method used."
+        "argument elsewhere), the retail category it covers, the extraction method used, and "
+        "`country` — the ISO code of the market that store sells in (CA = bills CAD from "
+        "Canada). Lead with the stores whose country matches the user's own; a store's "
+        "`note` names its limitations (IP wall, search-only, marketplace sellers)."
     )
 )
 async def list_stores() -> dict:

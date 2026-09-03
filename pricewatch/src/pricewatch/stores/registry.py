@@ -5,12 +5,14 @@ import asyncio
 import logging
 
 from .aliexpress import AliExpressAdapter
-from .apis import BestBuyAdapter, EbayAdapter
+from .apis import BestBuyAdapter, BestBuyCanadaAdapter, EbayAdapter
 from .base import StoreAdapter, StoreResult, host_of
 from .bigbox import AmazonAdapter, SelectorAdapter, WalmartAdapter
-from ..money import usd_sort_key
+from .canadacomputers import CanadaComputersAdapter
+from ..money import currency_for_region, region_for_host, usd_sort_key
 from .catalog import CATALOG, PRINT3D, TECH, keys_for_tag
 from .shopify import ShopifyAdapter, looks_like_shopify
+from .split import SplitPlatformAdapter
 from .structured import StructuredAdapter
 from .woocommerce import WooAdapter, looks_like_woo
 
@@ -22,6 +24,8 @@ _API_ADAPTERS: dict[str, type[StoreAdapter]] = {
     "walmart": WalmartAdapter,
     "ebay": EbayAdapter,
     "aliexpress": AliExpressAdapter,
+    "bestbuyca": BestBuyCanadaAdapter,
+    "canadacomputers": CanadaComputersAdapter,
 }
 
 
@@ -45,6 +49,23 @@ SELECTOR_RULES: dict[str, dict] = {
 }
 
 
+def _billing_currency(entry: dict) -> str | None:
+    """What a structured store's bare "$" means when its hostname lies.
+
+    memoryexpress.com is in Canada, so `country: CA` has to reach the reader
+    or its prices come back USD. A catalog `currency` says it outright (Prusa
+    is Czech but its .com quotes USD); otherwise the country decides, and a
+    hostname that already agrees with it needs nothing — None trusts the
+    domain. Shopify rows never come here: /cart.js is their oracle.
+    """
+    if entry.get("currency"):
+        return entry["currency"]
+    country = entry.get("country")
+    if not country or (region_for_host(entry["domains"][0]) or "US") == country:
+        return None
+    return currency_for_region(country) or None
+
+
 def _build(entry: dict) -> StoreAdapter:
     key, kind, domains = entry["key"], entry["kind"], entry["domains"]
     if kind == "api":
@@ -56,9 +77,14 @@ def _build(entry: dict) -> StoreAdapter:
     if kind == "selector":
         rules = SELECTOR_RULES[key]
         return SelectorAdapter(name=key, domains=domains, **rules)
+    currency = _billing_currency(entry)
+    if entry.get("shopify_markets"):
+        # A structured primary whose regional markets run on Shopify.
+        return SplitPlatformAdapter(name=key, domains=domains, shopify_domains=entry["shopify_markets"],
+                                    force_browser=(kind == "browser"), currency=currency)
     if kind == "browser":
-        return StructuredAdapter(name=key, domains=domains, force_browser=True)
-    return StructuredAdapter(name=key, domains=domains)
+        return StructuredAdapter(name=key, domains=domains, force_browser=True, currency=currency)
+    return StructuredAdapter(name=key, domains=domains, currency=currency)
 
 
 ADAPTERS: dict[str, StoreAdapter] = {entry["key"]: _build(entry) for entry in CATALOG}
@@ -125,15 +151,13 @@ async def search_stores(query: str, store_keys: list[str] | None = None,
 
 def searchable(key: str) -> bool:
     adapter = ADAPTERS.get(key)
-    if adapter is None:
-        return False
-    return type(adapter).search is not StoreAdapter.search
+    return adapter is not None and adapter.can_search()
 
 
 def catalog_summary() -> list[dict]:
     return [
         {"key": e["key"], "label": e["label"], "kind": e["kind"], "tags": e["tags"],
-         "domain": e["domains"][0], "searchable": searchable(e["key"]),
+         "domain": e["domains"][0], "country": e["country"], "searchable": searchable(e["key"]),
          **({"note": e["note"]} if e.get("note") else {})}
         for e in CATALOG
     ]
