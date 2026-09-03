@@ -76,10 +76,29 @@ async def _fetch_for_tracking(url: str) -> tuple[StoreResult, str | None]:
     return await fetch_offer(url), None
 
 
+def _missing_condition(target_price: float | None, drop_pct: float | None,
+                       alert_on_restock: bool) -> dict | None:
+    """A watch with nothing to fire on would sit silent forever. Refuse it
+    before any store is read, so the agent goes back and asks."""
+    if target_price is None and drop_pct is None and not alert_on_restock:
+        return {"ok": False, "error": ("a watch needs target_price, drop_pct, or "
+                                       "alert_on_restock=true — ask the user which they want")}
+    return None
+
+
+def _out_of_stock_note(store: str) -> str:
+    return (f"currently out of stock at {store}; set alert_on_restock=true to be told "
+            f"when it returns")
+
+
 # ─────────────────────────── registration ────────────────────────────────
 async def track_url(url: str, *, target_price: float | None = None, drop_pct: float | None = None,
-                    label: str = "", channels: str = "", cooldown_hours: int = 12) -> dict:
+                    alert_on_restock: bool = False, label: str = "", channels: str = "",
+                    cooldown_hours: int = 12) -> dict:
     """Start tracking a single product URL."""
+    refused = _missing_condition(target_price, drop_pct, alert_on_restock)
+    if refused:
+        return refused
     result, note = await _fetch_for_tracking(url)
     if not result.ok:
         return {"ok": False, "error": result.error or "could not read a price", "url": url,
@@ -100,6 +119,7 @@ async def track_url(url: str, *, target_price: float | None = None, drop_pct: fl
             drop_pct=drop_pct,
             baseline_price=result.price,
             currency=(result.currency or "").upper() or None,
+            alert_on_restock=alert_on_restock,
             channels=channels,
             cooldown_hours=cooldown_hours,
         )
@@ -108,9 +128,13 @@ async def track_url(url: str, *, target_price: float | None = None, drop_pct: fl
         out = {"ok": True, "product_id": product.id, "tracker_id": tracker.id,
                "offer_id": offer.id, "title": product.title, "url": offer.url,
                "price": float(result.price), "currency": result.currency,
+               "in_stock": result.in_stock,
                "store": result.store, "method": result.method}
-        if note:
-            out["note"] = note
+        notes = [note] if note else []
+        if result.in_stock is False and not alert_on_restock:
+            notes.append(_out_of_stock_note(result.store))
+        if notes:
+            out["note"] = "; ".join(notes)
         return out
 
     return await in_db(write)
@@ -118,9 +142,13 @@ async def track_url(url: str, *, target_price: float | None = None, drop_pct: fl
 
 async def track_query(description: str, *, stores: list[str] | None = None,
                       target_price: float | None = None, drop_pct: float | None = None,
-                      max_offers: int = 8, threshold: float = 70.0,
-                      channels: str = "", cooldown_hours: int = 12) -> dict:
+                      alert_on_restock: bool = False, max_offers: int = 8,
+                      threshold: float = 70.0, channels: str = "",
+                      cooldown_hours: int = 12) -> dict:
     """Search stores for a described product and track every plausible match."""
+    refused = _missing_condition(target_price, drop_pct, alert_on_restock)
+    if refused:
+        return refused
     ranked, searched, query_used = await _search_ranked(
         description, stores=stores, limit_per_store=3, threshold=threshold)
     if not ranked:
@@ -167,19 +195,23 @@ async def track_query(description: str, *, stores: list[str] | None = None,
             drop_pct=drop_pct,
             baseline_price=cheapest.price,
             currency=(cheapest.currency or "").upper() or None,
+            alert_on_restock=alert_on_restock,
             channels=channels,
             cooldown_hours=cooldown_hours,
         )
         session.add(tracker)
         session.flush()
-        return {"ok": True, "product_id": product.id, "tracker_id": tracker.id,
-                "title": product.title, "currency": tracker.currency, "offers": [
-                    {"store": o.store, "url": o.url, "price": float(o.last_price or 0),
-                     "currency": o.currency}
-                    for o in offers
-                ],
-                "best_price": float(cheapest.price), "best_store": cheapest.store,
-                "search_terms_used": query_used}
+        out = {"ok": True, "product_id": product.id, "tracker_id": tracker.id,
+               "title": product.title, "currency": tracker.currency, "offers": [
+                   {"store": o.store, "url": o.url, "price": float(o.last_price or 0),
+                    "currency": o.currency, "in_stock": o.in_stock}
+                   for o in offers
+               ],
+               "best_price": float(cheapest.price), "best_store": cheapest.store,
+               "search_terms_used": query_used}
+        if cheapest.in_stock is False and not alert_on_restock:
+            out["note"] = _out_of_stock_note(cheapest.store)
+        return out
 
     return await in_db(write)
 
@@ -240,7 +272,8 @@ async def find_more_stores(product_id: int, *, threshold: float = 74.0,
 
 
 def _upsert_offer(session: Session, product_id: int, result: StoreResult) -> Offer:
-    """Insert-or-update an offer and append a price point when the price moved."""
+    """Insert-or-update an offer and append a price point when the price or
+    the stock state moved."""
     offer = session.scalar(select(Offer).where(Offer.url == result.url))
     if offer is None:
         offer = Offer(product_id=product_id, store=result.store, url=result.url)
@@ -250,9 +283,19 @@ def _upsert_offer(session: Session, product_id: int, result: StoreResult) -> Off
     offer.title = result.title or offer.title
     offer.sku = result.sku or offer.sku
     offer.currency = result.currency or offer.currency
-    offer.in_stock = result.in_stock
     offer.method = result.method
     offer.last_checked_at = utcnow()
+
+    # A read that says nothing about stock (a bot wall, a 404, a store that
+    # does not report it) leaves what we knew in place, like last_price. If
+    # it cleared the flag instead, one blocked sweep between "sold out" and
+    # "back" would turn a real restock into a first sighting and lose it.
+    stock_changed = result.in_stock is not None and result.in_stock != offer.in_stock
+    if stock_changed:
+        if offer.in_stock is False and result.in_stock:
+            offer.last_restocked_at = offer.last_checked_at
+        offer.stock_changed_at = offer.last_checked_at
+        offer.in_stock = result.in_stock
 
     if result.price is not None:
         offer.last_price = result.price
@@ -260,9 +303,10 @@ def _upsert_offer(session: Session, product_id: int, result: StoreResult) -> Off
                               else min(offer.lowest_price, result.price))
         offer.last_error = None
         offer.consecutive_errors = 0
-        if previous is None or previous != result.price:
+        # A stock-only point keeps availability visible in the history.
+        if previous is None or previous != result.price or stock_changed:
             session.add(PricePoint(offer=offer, price=result.price,
-                                   currency=offer.currency, in_stock=result.in_stock))
+                                   currency=offer.currency, in_stock=offer.in_stock))
     else:
         offer.last_error = result.error
         offer.consecutive_errors += 1
@@ -357,6 +401,11 @@ def _reasons(tracker: Tracker, price: Decimal, currency: str | None = None) -> l
     return hits
 
 
+def _utc(value: dt.datetime) -> dt.datetime:
+    """SQLite hands timezone-aware columns back naive; they were written in UTC."""
+    return value if value.tzinfo else value.replace(tzinfo=dt.timezone.utc)
+
+
 def _should_notify(tracker: Tracker, price: Decimal) -> bool:
     """Respect the cooldown, unless the price has fallen further since last time.
 
@@ -368,37 +417,72 @@ def _should_notify(tracker: Tracker, price: Decimal) -> bool:
         return True
     if price < tracker.last_notified_price:
         return True
-    last_at = tracker.last_notified_at
-    if last_at.tzinfo is None:
-        last_at = last_at.replace(tzinfo=dt.timezone.utc)
-    cooled = utcnow() - last_at >= dt.timedelta(hours=tracker.cooldown_hours)
+    cooled = utcnow() - _utc(tracker.last_notified_at) >= dt.timedelta(hours=tracker.cooldown_hours)
     return cooled and price != tracker.last_notified_price
 
 
+def _restocked_offer(session: Session, tracker: Tracker, currency: str | None) -> Offer | None:
+    """Cheapest listing in the watch's currency that came back in stock since
+    the watch last said so.
+
+    A restock is an event, not a level, so there is no cooldown to respect:
+    the watermark is the last restock told, and the next alert needs a later
+    out→in transition. A foreign listing never counts, for the same reason
+    it never trips a price threshold.
+    """
+    offers = session.scalars(
+        select(Offer).where(Offer.product_id == tracker.product_id, Offer.active.is_(True))
+    ).all()
+    since = tracker.last_restock_notified_at
+    fresh = [
+        o for o in offers
+        if o.in_stock is True and o.last_restocked_at is not None and o.last_price is not None
+        and (not currency or (o.currency or "").upper() == currency.upper())
+        and (since is None or _utc(o.last_restocked_at) > _utc(since))
+    ]
+    return min(fresh, key=lambda o: o.last_price) if fresh else None
+
+
+def _pending(kind: str, tracker: Tracker, product: Product | None, offer: Offer,
+             reasons: list[str]) -> dict:
+    """Everything the send loop needs, detached from the session it came from."""
+    return {
+        "kind": kind, "tracker_id": tracker.id, "offer_id": offer.id,
+        "label": tracker.label or (product.title if product else ""),
+        "title": product.title if product else tracker.label,
+        "price": offer.last_price, "currency": offer.currency,
+        "store": offer.store, "url": offer.url,
+        "baseline": tracker.baseline_price,
+        "reasons": reasons, "channels": tracker.channels,
+    }
+
+
 async def evaluate_trackers() -> list[dict]:
-    """Find trackers whose conditions are met and send their notifications."""
+    """Find trackers whose conditions are met and send their notifications.
+
+    A watch can carry a price rule and a restock rule at once. Each fires on
+    its own terms and comes back as its own entry, tagged by `kind`.
+    """
     def read(session: Session) -> list[dict]:
         pending = []
         for tracker in session.scalars(select(Tracker).where(Tracker.active.is_(True))).all():
             # Only listings in the watch's own currency are measured against
             # its thresholds. A cheaper foreign listing is not a drop.
             currency = _tracker_currency(session, tracker)
-            offer = _best_offer(session, tracker.product_id, currency)
-            if offer is None or offer.last_price is None:
-                continue
-            hits = _reasons(tracker, offer.last_price, currency)
-            if not hits or not _should_notify(tracker, offer.last_price):
-                continue
             product = session.get(Product, tracker.product_id)
-            pending.append({
-                "tracker_id": tracker.id, "offer_id": offer.id,
-                "label": tracker.label or (product.title if product else ""),
-                "title": product.title if product else tracker.label,
-                "price": offer.last_price, "currency": offer.currency,
-                "store": offer.store, "url": offer.url,
-                "baseline": tracker.baseline_price,
-                "reasons": hits, "channels": tracker.channels,
-            })
+            offer = _best_offer(session, tracker.product_id, currency)
+            if offer is not None and offer.last_price is not None:
+                hits = _reasons(tracker, offer.last_price, currency)
+                if hits and _should_notify(tracker, offer.last_price):
+                    pending.append(_pending("price", tracker, product, offer, hits))
+            if tracker.alert_on_restock:
+                restocked = _restocked_offer(session, tracker, currency)
+                if restocked is not None:
+                    # A price condition the returned listing also meets is
+                    # worth a line: "back, and under your target" is the answer.
+                    pending.append(_pending(
+                        "restock", tracker, product, restocked,
+                        _reasons(tracker, restocked.last_price, currency)))
         return pending
 
     pending = await in_db(read)
@@ -406,10 +490,15 @@ async def evaluate_trackers() -> list[dict]:
 
     for item in pending:
         only = [c.strip() for c in item["channels"].split(",") if c.strip()] or None
+        restock = item["kind"] == "restock"
+        amount = fmt(item["price"], item["currency"])
+        headline = (f"**back in stock** at **{item['store']}** — {amount}" if restock
+                    else f"**{amount}** at **{item['store']}**")
+        # The leading reason doubles as the audit trail's kind marker.
+        reasons = ([f"back in stock at {item['store']}"] if restock else []) + item["reasons"]
         alert = Alert(
-            title=f"💸 {item['title'][:120]}",
-            body=(f"**{fmt(item['price'], item['currency'])}** at **{item['store']}**\n"
-                  + "\n".join(f"• {r}" for r in item["reasons"])),
+            title=f"{'📦' if restock else '💸'} {item['title'][:120]}",
+            body="\n".join([headline, *(f"• {r}" for r in item["reasons"])]),
             url=item["url"],
             price=float(item["price"]),
             old_price=float(item["baseline"]) if item["baseline"] else None,
@@ -419,23 +508,27 @@ async def evaluate_trackers() -> list[dict]:
         outcome = await dispatch(alert, only=only)
         delivered = any(v == "sent" for v in outcome.values())
 
-        def write(session: Session, item=item, outcome=outcome, delivered=delivered) -> None:
+        def write(session: Session, item=item, reasons=reasons, outcome=outcome,
+                  delivered=delivered) -> None:
             tracker = session.get(Tracker, item["tracker_id"])
             if tracker is None:
                 return
-            tracker.last_notified_at = utcnow()
-            tracker.last_notified_price = item["price"]
+            if item["kind"] == "restock":
+                tracker.last_restock_notified_at = utcnow()
+            else:
+                tracker.last_notified_at = utcnow()
+                tracker.last_notified_price = item["price"]
             session.add(AlertEvent(
                 tracker_id=tracker.id, offer_id=item["offer_id"], price=item["price"],
-                reason="; ".join(item["reasons"])[:300],
+                reason="; ".join(reasons)[:300],
                 channels=",".join(outcome.keys()), delivered=delivered,
                 detail="; ".join(f"{k}={v}" for k, v in outcome.items())[:2000],
             ))
 
         await in_db(write)
-        sent.append({"tracker_id": item["tracker_id"], "title": item["title"],
-                     "price": float(item["price"]), "store": item["store"],
-                     "reasons": item["reasons"], "channels": outcome})
+        sent.append({"kind": item["kind"], "tracker_id": item["tracker_id"],
+                     "title": item["title"], "price": float(item["price"]),
+                     "store": item["store"], "reasons": reasons, "channels": outcome})
         if not delivered:
             log.warning("tracker %s matched but no channel delivered: %s",
                         item["tracker_id"], outcome)
@@ -449,6 +542,8 @@ def _offer_dict(offer: Offer) -> dict:
             "lowest": float(offer.lowest_price) if offer.lowest_price is not None else None,
             "currency": offer.currency, "in_stock": offer.in_stock, "method": offer.method,
             "last_checked": offer.last_checked_at.isoformat() if offer.last_checked_at else None,
+            "stock_changed_at": offer.stock_changed_at.isoformat() if offer.stock_changed_at else None,
+            "last_restocked_at": offer.last_restocked_at.isoformat() if offer.last_restocked_at else None,
             "error": offer.last_error,
             "consecutive_errors": offer.consecutive_errors}
 
@@ -464,6 +559,10 @@ async def list_tracked() -> list[dict]:
             best = _best_offer(session, tracker.product_id, currency)
             foreign = [o for o in offers
                        if currency and (o.currency or "").upper() != currency]
+            # Same one-currency rule as the alert: a foreign listing that is
+            # sold out is not something this watch will ever report back.
+            out_of_stock = [o for o in offers
+                            if o.in_stock is False and o not in foreign]
             row = {
                 "tracker_id": tracker.id, "product_id": tracker.product_id,
                 "label": tracker.label, "title": product.title if product else None,
@@ -472,13 +571,17 @@ async def list_tracked() -> list[dict]:
                 "target_price": float(tracker.target_price) if tracker.target_price else None,
                 "drop_pct": tracker.drop_pct,
                 "baseline_price": float(tracker.baseline_price) if tracker.baseline_price else None,
+                "alert_on_restock": bool(tracker.alert_on_restock),
                 "current_best": (
                     {"price": float(best.last_price), "currency": best.currency,
                      "store": best.store, "url": best.url}
                     if best and best.last_price is not None else None),
+                "out_of_stock_listings": len(out_of_stock),
                 "channels": tracker.channels or "all configured",
                 "last_notified_at": (tracker.last_notified_at.isoformat()
                                      if tracker.last_notified_at else None),
+                "last_restock_notified_at": (tracker.last_restock_notified_at.isoformat()
+                                             if tracker.last_restock_notified_at else None),
                 "offers": [_offer_dict(o) for o in offers],
             }
             if foreign:
@@ -506,10 +609,23 @@ async def price_history(product_id: int, limit: int = 200) -> dict:
         # skews a USD average.
         best = _best_offer(session, product_id)
         summary = None
+
+        def distinct(subset: list[PricePoint]) -> list[Decimal]:
+            """One observation per price change per offer. A stock-only point
+            repeats the price it was recorded at, and counting it would pad
+            the average and the observation count with non-events."""
+            last: dict[int, Decimal] = {}
+            prices = []
+            for p in subset:
+                if last.get(p.offer_id) != p.price:
+                    prices.append(p.price)
+                last[p.offer_id] = p.price
+            return prices
+
         if points:
             currency = best.currency if best else points[0].currency
-            relevant = [p.price for p in points if p.currency == currency] \
-                or [p.price for p in points]
+            relevant = distinct([p for p in points if p.currency == currency]) \
+                or distinct(points)
             current = (best.last_price if best and best.last_price is not None
                        else relevant[0])
             lowest, highest = min(relevant), max(relevant)
@@ -549,6 +665,7 @@ async def list_alerts(limit: int = 30) -> dict:
                 "id": event.id,
                 "tracker_id": event.tracker_id,
                 "label": tracker.label if tracker else None,
+                "kind": "restock" if event.reason.startswith("back in stock") else "price",
                 "price": float(event.price),
                 "reason": event.reason,
                 "store": offer.store if offer else None,
@@ -567,11 +684,17 @@ async def set_tracker(tracker_id: int, **changes) -> dict:
         tracker = session.get(Tracker, tracker_id)
         if tracker is None:
             return {"ok": False, "error": f"no tracker {tracker_id}"}
-        for field in ("target_price", "drop_pct", "channels", "cooldown_hours", "active", "label"):
+        for field in ("target_price", "drop_pct", "alert_on_restock", "channels",
+                      "cooldown_hours", "active", "label"):
             if field in changes and changes[field] is not None:
                 value = changes[field]
                 if field == "target_price":
                     value = Decimal(str(value))
+                if field == "alert_on_restock" and value and not tracker.alert_on_restock:
+                    # Switching the rule on starts the clock now. A listing that
+                    # came back last week and is still in stock is not news the
+                    # user asked for; only a return after this moment is.
+                    tracker.last_restock_notified_at = utcnow()
                 setattr(tracker, field, value)
         if changes.get("reset_baseline"):
             best = _best_offer(session, tracker.product_id, _tracker_currency(session, tracker))

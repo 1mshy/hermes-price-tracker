@@ -16,6 +16,7 @@ class TrackUrlIn(BaseModel):
     url: str
     target_price: float | None = None
     drop_pct: float | None = Field(default=None, ge=0, le=99)
+    alert_on_restock: bool = False
     label: str = ""
     channels: str = ""
     cooldown_hours: int = 12
@@ -25,6 +26,7 @@ class TrackQueryIn(BaseModel):
     description: str
     target_price: float | None = None
     drop_pct: float | None = Field(default=None, ge=0, le=99)
+    alert_on_restock: bool = False
     stores: list[str] | None = None
     channels: str = ""
     cooldown_hours: int = 12
@@ -58,6 +60,7 @@ class CarSearchIn(BaseModel):
 class TrackerPatch(BaseModel):
     target_price: float | None = None
     drop_pct: float | None = None
+    alert_on_restock: bool | None = None
     channels: str | None = None
     cooldown_hours: int | None = None
     active: bool | None = None
@@ -95,7 +98,8 @@ async def trackers() -> dict:
 async def track_url(body: TrackUrlIn) -> dict:
     result = await service.track_url(
         body.url, target_price=body.target_price, drop_pct=body.drop_pct,
-        label=body.label, channels=body.channels, cooldown_hours=body.cooldown_hours)
+        alert_on_restock=body.alert_on_restock, label=body.label, channels=body.channels,
+        cooldown_hours=body.cooldown_hours)
     if not result.get("ok"):
         raise HTTPException(status_code=422, detail=result)
     return result
@@ -105,7 +109,8 @@ async def track_url(body: TrackUrlIn) -> dict:
 async def track_query(body: TrackQueryIn) -> dict:
     result = await service.track_query(
         body.description, stores=body.stores, target_price=body.target_price,
-        drop_pct=body.drop_pct, channels=body.channels, cooldown_hours=body.cooldown_hours)
+        drop_pct=body.drop_pct, alert_on_restock=body.alert_on_restock,
+        channels=body.channels, cooldown_hours=body.cooldown_hours)
     if not result.get("ok"):
         raise HTTPException(status_code=422, detail=result)
     return result

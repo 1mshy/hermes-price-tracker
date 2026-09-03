@@ -51,6 +51,10 @@ class Offer(Base):
     last_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     lowest_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     in_stock: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # When in_stock last flipped, and when it last went False→True. A first
+    # read (None→True) is not a restock: nothing was ever seen missing.
+    stock_changed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_restocked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     method: Mapped[str | None] = mapped_column(String(50), nullable=True)   # how we read it
     last_checked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -77,7 +81,7 @@ class PricePoint(Base):
 
 
 class Tracker(Base):
-    """A rule: tell me when this product goes below X, or drops Y%."""
+    """A rule: tell me when this product goes below X, drops Y%, or is back in stock."""
     __tablename__ = "trackers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -93,6 +97,10 @@ class Tracker(Base):
     # reference but are never measured against these numbers: USD 99.99 is not
     # "below" a CAD 119 baseline, whatever the digits say.
     currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # Restock alerts are event-based, not threshold-based: one per out→in
+    # transition, so the watermark is the last restock told, not a cooldown.
+    alert_on_restock: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_restock_notified_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     channels: Mapped[str] = mapped_column(String(200), default="")   # "discord,signal" — blank = all configured
     cooldown_hours: Mapped[int] = mapped_column(Integer, default=12)

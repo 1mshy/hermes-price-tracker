@@ -1,8 +1,8 @@
 ---
 name: price-tracking
-description: Research prices across tech and 3D-printing retailers, check Reddit deal chatter, and set up price-drop alerts and scheduled checks. Use whenever the user asks what something costs, where it is cheapest, whether a deal is good, mentions a price seen on Reddit, or asks to be told when a price falls.
+description: Research prices across tech and 3D-printing retailers, check Reddit deal chatter, and set up price-drop alerts and scheduled checks. Use whenever the user asks what something costs, where it is cheapest, whether a deal is good, mentions a price seen on Reddit, asks to be told when a price falls, or wants to know when something is back in stock.
 metadata:
-  version: 1.3.0
+  version: 1.4.0
 ---
 
 # Price research and tracking
@@ -19,6 +19,7 @@ returns, with the store name and URL beside every figure.
 | A price for one specific page they linked | `get_price` |
 | "Tell me when this link drops below $N" | `track_product_url` |
 | "Watch X everywhere and alert me" | `track_product_description` |
+| "Tell me when X is back in stock" | `track_product_url` / `track_product_description` with `alert_on_restock=true` |
 | "What am I watching?" | `list_trackers` |
 | "Is this actually a good price?" | `get_price_history` |
 | "Check right now" | `refresh_prices_now` |
@@ -89,15 +90,33 @@ listing is foreign.
 
 ## Setting up an alert
 
-Every watch needs at least one condition:
+Every watch needs at least one condition — the engine refuses one with none:
 
 - `target_price` — absolute dollar threshold, best when the user names a number.
 - `drop_pct` — percentage below the price at the moment the watch is created.
+- `alert_on_restock=true` — tell the user when a sold-out listing comes back.
 
 If the user says something loose like "tell me if it goes on sale", propose a
 concrete rule (a 10–15% drop is a reasonable default) and confirm it rather than
 silently picking one. After creating a watch, tell them the current price, the
 condition, and which channels will notify them.
+
+### Back-in-stock watches
+
+`alert_on_restock=true` on either `track_*` tool fires once when a listing on
+the watch goes from out of stock to in stock, naming the cheapest returned store
+and its price. It is event-based: no cooldown, and no repeat until the listing
+has sold out and come back again. The one-currency rule applies — a foreign
+listing coming back never fires the watch. It combines freely with
+`target_price` / `drop_pct`: each fires on its own terms, the restock alert
+mentions a price condition the returned listing also meets, and
+`list_alert_events` tags every event with `kind` (`price` or `restock`).
+
+When a `track_*` result's `note` says the listing is out of stock today and the
+user only asked for a price watch, offer the restock alert — a low price on an
+unavailable item is not a deal — and switch it on with
+`update_tracker(alert_on_restock=true)` rather than recreating the watch.
+`list_trackers` reports `out_of_stock_listings` per watch.
 
 Call `check_notifications` if the user is unsure whether alerts will reach them;
 it reports which of Discord / Signal / WhatsApp are configured and can send a

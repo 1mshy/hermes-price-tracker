@@ -216,10 +216,11 @@ static and for ranking and orientation only, never for quoting.
 
 ## Alerts
 
-A watch fires when either condition is met:
+A watch fires when any of its conditions is met (it needs at least one):
 
 - `target_price` — absolute, e.g. alert under $250.
 - `drop_pct` — relative to the price when the watch was created.
+- `alert_on_restock` — a sold-out listing on the watch comes back.
 
 Both are in the **watch's currency** — that of the listing the watch was created
 from (the user's own whenever a match bills in it). Only listings in that
@@ -234,6 +235,18 @@ Alerts are deduplicated by a per-tracker cooldown (default 12 h) that is bypasse
 only when the price falls *further* than the last alert; once it expires, a
 repeat goes out only if the price has moved since the last one, so a slow slide
 keeps notifying while a flat price stays quiet.
+
+Restock alerts are events, not levels, so none of that applies to them. One
+fires when a listing in the watch's currency goes from out of stock to in stock
+(a first sighting is not a restock), names the cheapest such store and its
+price, and adds a line if that listing also meets the price condition. There is
+no cooldown and no repeat until the listing has sold out and come back again. A
+sweep that cannot read a listing leaves its last known stock state alone, so
+one blocked read between "sold out" and "back" does not lose the restock.
+Stock changes are written to the price history alongside price changes
+(without counting as price observations), `list_trackers` reports
+`out_of_stock_listings` per watch, and a watch created on a sold-out listing
+without `alert_on_restock` says so in its `note`.
 
 Configure channels in `.env`:
 
@@ -421,6 +434,8 @@ curl -XPOST localhost:8077/api/compare -H 'Content-Type: application/json' \
      -d '{"query":"Polymaker PolyTerra PLA 1kg"}'
 curl -XPOST localhost:8077/api/trackers/url -H 'Content-Type: application/json' \
      -d '{"url":"https://...","drop_pct":12}'
+curl -XPOST localhost:8077/api/trackers/url -H 'Content-Type: application/json' \
+     -d '{"url":"https://...","alert_on_restock":true}'
 curl localhost:8077/api/trackers
 curl -XPOST localhost:8077/api/refresh
 curl localhost:8077/api/alerts

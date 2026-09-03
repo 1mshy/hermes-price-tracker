@@ -116,7 +116,7 @@ def test_track_query_refuses_search_only_matches(monkeypatch):
             currency="USD", in_stock=True, method="aliexpress-search")]
 
     monkeypatch.setattr(service, "search_stores", fake_search)
-    out = asyncio.run(service.track_query("SUNLU AMS Heater Bambu Lab"))
+    out = asyncio.run(service.track_query("SUNLU AMS Heater Bambu Lab", drop_pct=10))
     assert out["ok"] is False
     assert "cannot be tracked" in out["error"]
     assert out["matches"][0]["store"] == "aliexpress"

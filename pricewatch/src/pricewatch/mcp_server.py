@@ -22,7 +22,8 @@ _BASE_INSTRUCTIONS = (
     "Price research and tracking across major tech and 3D-printing retailers. "
     "Use compare_prices for a one-off 'what does this cost' question. Use "
     "track_product_url or track_product_description to set up an ongoing watch "
-    "that notifies the user on Discord/Signal/WhatsApp when a price target is hit. "
+    "that notifies the user on Discord/Signal/WhatsApp when a price target is hit or a "
+    "sold-out listing comes back in stock. "
     "Prices are read from official store APIs and structured product data, so "
     "always report the store and URL alongside any figure you quote."
 )
@@ -84,23 +85,31 @@ async def compare_prices(query: str, stores: list[str] | None = None,
 
 @mcp.tool(
     description=(
-        "Start tracking the price of a specific product URL and alert the user when it drops. "
-        "Set target_price for an absolute threshold (alert when price <= target), and/or "
-        "drop_pct for a relative one (alert when it falls that many percent below today's "
-        "price). At least one of the two should be given. Thresholds are in the currency of "
-        "the listing registered, which the result reports; an Amazon link is registered on "
-        "the user's regional marketplace (amazon.ca for a CAD shopper) when the ASIN resolves "
-        "there, and the result's `note` says so. channels is an optional "
-        "comma-separated subset of 'discord,signal,whatsapp' — leave empty to use every "
-        "channel the user has configured."
+        "Start tracking a specific product URL and alert the user when it drops or comes "
+        "back in stock. Give at least one condition, or the call is refused and you must "
+        "ask the user which they want: target_price for an absolute threshold (alert when "
+        "price <= target), drop_pct for a relative one (alert when it falls that many "
+        "percent below today's price), and/or alert_on_restock=true to be told when the "
+        "listing goes from out of stock to in stock. A restock alert fires once per "
+        "return — no cooldown, and not again until the listing has sold out and come back "
+        "— and only for a listing in the watch's currency; combined with a price "
+        "condition, each fires on its own terms. Thresholds are in the currency of the "
+        "listing registered, which the result reports along with its `in_stock` state; "
+        "an Amazon link is registered on the user's regional marketplace (amazon.ca for a "
+        "CAD shopper) when the ASIN resolves there, and the result's `note` says so. The "
+        "`note` also flags a listing that is sold out today, so you can offer the restock "
+        "alert. channels is an optional comma-separated subset of "
+        "'discord,signal,whatsapp' — leave empty to use every channel the user has "
+        "configured."
     )
 )
 async def track_product_url(url: str, target_price: float | None = None,
-                            drop_pct: float | None = None, label: str = "",
-                            channels: str = "", cooldown_hours: int = 12) -> dict:
+                            drop_pct: float | None = None, alert_on_restock: bool = False,
+                            label: str = "", channels: str = "",
+                            cooldown_hours: int = 12) -> dict:
     return await service.track_url(url, target_price=target_price, drop_pct=drop_pct,
-                                   label=label, channels=channels,
-                                   cooldown_hours=cooldown_hours)
+                                   alert_on_restock=alert_on_restock, label=label,
+                                   channels=channels, cooldown_hours=cooldown_hours)
 
 
 @mcp.tool(
@@ -110,23 +119,29 @@ async def track_product_url(url: str, target_price: float | None = None,
         "variant — because matching across stores depends on it. Creates one watch covering "
         "all matched store listings and alerts on the cheapest one in the watch's currency "
         "(the user's own whenever a match bills in it; listings in other currencies are kept "
-        "for reference but never trigger it). Same target_price / drop_pct semantics as "
-        "track_product_url."
+        "for reference but never trigger it). Same target_price / drop_pct / "
+        "alert_on_restock semantics as track_product_url: at least one is required, and a "
+        "restock alert fires once whenever a listing in the watch's currency comes back in "
+        "stock, naming the cheapest one. The result lists every matched listing with its "
+        "`in_stock` state and its `note` says when the baseline listing is sold out today."
     )
 )
 async def track_product_description(description: str, target_price: float | None = None,
                                     drop_pct: float | None = None,
+                                    alert_on_restock: bool = False,
                                     stores: list[str] | None = None,
                                     channels: str = "", cooldown_hours: int = 12) -> dict:
     return await service.track_query(description, stores=stores, target_price=target_price,
-                                     drop_pct=drop_pct, channels=channels,
-                                     cooldown_hours=cooldown_hours)
+                                     drop_pct=drop_pct, alert_on_restock=alert_on_restock,
+                                     channels=channels, cooldown_hours=cooldown_hours)
 
 
 @mcp.tool(
     description=(
-        "List every active price watch with its currency, target, current cheapest offer in "
-        "that currency, and every store listing being monitored (foreign_listings counts the "
+        "List every price watch with its currency, target_price, drop_pct, alert_on_restock, "
+        "current cheapest offer in that currency, out_of_stock_listings (how many in-currency "
+        "listings are sold out right now), and every store listing being monitored with its "
+        "in_stock state and when it last came back in stock (foreign_listings counts the "
         "ones in other currencies, which never trigger the watch). Use this before modifying "
         "or deleting a tracker so you can quote the right tracker_id."
     )
@@ -138,16 +153,19 @@ async def list_trackers() -> dict:
 @mcp.tool(
     description=(
         "Change an existing watch: adjust target_price, drop_pct, notification channels, "
-        "cooldown_hours, or pause it with active=false. Set reset_baseline=true to make the "
-        "current price the new reference point for percentage drops."
+        "cooldown_hours, switch the back-in-stock alert on or off with alert_on_restock, or "
+        "pause it with active=false. Set reset_baseline=true to make the current price the "
+        "new reference point for percentage drops."
     )
 )
 async def update_tracker(tracker_id: int, target_price: float | None = None,
-                         drop_pct: float | None = None, channels: str | None = None,
-                         cooldown_hours: int | None = None, active: bool | None = None,
-                         label: str | None = None, reset_baseline: bool = False) -> dict:
+                         drop_pct: float | None = None, alert_on_restock: bool | None = None,
+                         channels: str | None = None, cooldown_hours: int | None = None,
+                         active: bool | None = None, label: str | None = None,
+                         reset_baseline: bool = False) -> dict:
     return await service.set_tracker(
-        tracker_id, target_price=target_price, drop_pct=drop_pct, channels=channels,
+        tracker_id, target_price=target_price, drop_pct=drop_pct,
+        alert_on_restock=alert_on_restock, channels=channels,
         cooldown_hours=cooldown_hours, active=active, label=label,
         reset_baseline=reset_baseline)
 
@@ -336,7 +354,8 @@ async def set_sweep_schedule(cron: str) -> dict:
 
 @mcp.tool(
     description=(
-        "Show the most recent fired price alerts, newest first: which tracker fired, at "
+        "Show the most recent fired alerts, newest first: which tracker fired, its `kind` "
+        "('price' for a threshold hit, 'restock' for a listing that came back in stock), at "
         "what price, why, and whether any notification channel actually delivered it. Use "
         "this to answer 'has anything triggered?' — especially when no notification "
         "channels are configured, which makes fired alerts otherwise invisible."
