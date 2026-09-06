@@ -1,0 +1,40 @@
+<!doctype html>
+<!-- A cut-down amazon.ca product page with a clip coupon beside the buy box.
+     The widget ids and classes (corePriceDisplay_desktop_feature_div,
+     promoPriceBlockMessage_feature_div, vpcButton, couponText*, dealBadge_feature_div,
+     data-a-strike) are Amazon's own; the coupon label follows the strings the
+     page bundle declares for it ("{number} off coupon", "Save {number,percent}
+     with coupon"). Built by hand: no live coupon was on a reachable listing the
+     day the parser was written. -->
+<html><head><title>Amazon.ca</title></head>
+<body>
+<span id="productTitle" class="a-size-large product-title-word-break">SUNLU Filament Dryer, AMS Heater, Compatible with Bambu Lab AMS 1.0 (AMS Not Included)</span>
+<div id="apex_desktop">
+  <script type="a-state" data-a-state='{"key":"apex-strings"}'>{"coupon_amount":"{number} off coupon","coupon_percent":"{percent} off coupon","lightning_deal":"Lightning Deal","featured_product_coupon":"Save {number,percent} with coupon","deal_of_the_day":"Deal of the Day"}</script>
+  <div id="corePrice_feature_div" class="celwidget" data-feature-name="corePrice"></div>
+  <div id="corePriceDisplay_desktop_feature_div" class="celwidget" data-feature-name="corePriceDisplay_desktop">
+    <div class="a-section a-spacing-none aok-align-center aok-relative">
+      <span class="aok-offscreen"> $167.73 </span>
+      <span class="a-price aok-align-center reinventPricePriceToPayMargin priceToPay apex-pricetopay-value" data-a-size="xl" data-a-color="base"><span class="a-offscreen">$167.73</span><span aria-hidden="true"><span class="a-price-symbol">$</span><span class="a-price-whole">167<span class="a-price-decimal">.</span></span><span class="a-price-fraction">73</span></span></span>
+      <!--STRIKE-->
+    </div>
+  </div>
+  <div id="dealBadge_feature_div" class="celwidget" data-feature-name="dealBadge"><!--BADGE--></div>
+  <div id="promoPriceBlockMessage_feature_div" class="celwidget" data-feature-name="promoPriceBlockMessage">
+    <div>
+      <div class="a-section a-spacing-none a-padding-none" id="vpcButton">
+        <div class="a-row promoPriceBlockMessage">
+          <span id="couponBadgepctch2f6a" class="a-size-base a-color-secondary">Coupon:</span>
+          <div class="a-checkbox a-checkbox-fancy a-touch-checkbox-hidden inlineCheckbox"><label for="checkboxpctch2f6a">
+            <input type="checkbox" name="" value="" id="checkboxpctch2f6a">
+            <i class="a-icon a-icon-checkbox"></i>
+            <span id="couponTextpctch2f6a" class="a-checkbox-label a-color-success">Apply $117.74 coupon</span>
+          </label></div>
+          <span class="a-declarative"><a class="a-link-normal a-declarative" href="#">Terms</a></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="availability" class="a-section a-spacing-none"><span class="a-size-medium a-color-success">In Stock</span></div>
+</body></html>

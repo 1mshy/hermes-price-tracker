@@ -387,3 +387,88 @@ def test_adding_a_foreign_listing_to_a_watch_says_it_will_not_alert(monkeypatch)
     out = asyncio.run(service.add_offer(pid, "https://www.amazon.com/dp/B0FQVHHBQV"))
     assert out["ok"] and out["currency"] == "USD"
     assert "never triggers" in out["note"]
+
+
+# ── deal notes: coupons ride along with the price ───────────────────────
+def test_upsert_stores_and_clears_the_deal_note():
+    init_db()
+    with session_scope() as session:
+        product = Product(title="Sunlu AMS heater", match_key="sunlu ams heater")
+        session.add(product)
+        session.flush()
+        url = f"https://www.amazon.ca/dp/COUPON{product.id}"
+        with_coupon = _result("49.99", url)
+        with_coupon.extra["deal_note"] = "CA$49.99 after the on-page coupon (117.74 off)"
+        offer = service._upsert_offer(session, product.id, with_coupon)
+        assert offer.deal_note.startswith("CA$49.99 after")
+        assert service._offer_dict(offer)["deal_note"] == offer.deal_note
+        offer = service._upsert_offer(session, product.id, _result("167.73", url))
+        assert offer.deal_note is None                 # the coupon lapsed
+
+
+def test_alert_body_carries_the_deal_note(monkeypatch):
+    init_db()
+    sent = _capture_dispatch(monkeypatch)
+    note = "CA$49.99 after the on-page coupon (117.74 off); sticker price CA$167.73 — clip the coupon"
+    with session_scope() as session:
+        product = Product(title="Sunlu AMS heater", match_key="sunlu ams heater")
+        session.add(product)
+        session.flush()
+        session.add(Offer(product_id=product.id, store="amazon",
+                          url=f"https://www.amazon.ca/dp/NOTE{product.id}", currency="CAD",
+                          last_price=Decimal("49.99"), in_stock=True, deal_note=note,
+                          consecutive_errors=0, active=True))
+        tracker = _tracker(product_id=product.id, currency="CAD", target_price=Decimal("80"))
+        session.add(tracker)
+        session.flush()
+        tid = tracker.id
+    fired = [f for f in asyncio.run(service.evaluate_trackers()) if f["tracker_id"] == tid]
+    assert fired and fired[0]["deal_note"] == note
+    alert = next(a for a in sent if a.price == 49.99)
+    assert "clip the coupon" in alert.body
+    assert "CA$49.99" in alert.body
+
+
+# ── agent-authored pushes share the channels and the audit trail ────────
+def test_push_note_records_an_agent_event(monkeypatch):
+    init_db()
+    sent = _capture_dispatch(monkeypatch)
+    with session_scope() as session:
+        product = Product(title="Sunlu AMS heater", match_key="sunlu ams heater")
+        session.add(product)
+        session.flush()
+        tracker = _tracker(product_id=product.id, label="SUNLU AMS Heater", currency="CAD",
+                           target_price=Decimal("80"))
+        session.add(tracker)
+        session.flush()
+        tid = tracker.id
+    out = asyncio.run(service.push_note(
+        "Sunlu AMS heater: $49.99 coupon on amazon.ca",
+        "r/3dbargains says the clip coupon is back; not visible from here yet.",
+        url="https://www.amazon.ca/dp/B0FQVHHBQV", tracker_id=tid, price=49.99))
+    assert out["ok"] and out["delivered"] and out["recorded_on_tracker"] == tid
+    assert sent[-1].title.endswith("Sunlu AMS heater: $49.99 coupon on amazon.ca")
+    assert sent[-1].url == "https://www.amazon.ca/dp/B0FQVHHBQV"
+    newest = asyncio.run(service.list_alerts(limit=1))["alerts"][0]
+    assert newest["kind"] == "agent" and newest["tracker_id"] == tid
+    assert newest["reason"].startswith("agent: Sunlu AMS heater")
+    assert newest["price"] == 49.99 and newest["delivered"] is True
+    assert "not visible from here" in newest["detail"]
+
+
+def test_push_note_without_a_watch_is_sent_but_not_recorded(monkeypatch):
+    init_db()
+    _capture_dispatch(monkeypatch)
+    before = len(asyncio.run(service.list_alerts(limit=500))["alerts"])
+    out = asyncio.run(service.push_note("hello", "world"))
+    assert out["ok"] and out["recorded_on_tracker"] is None
+    assert len(asyncio.run(service.list_alerts(limit=500))["alerts"]) == before
+
+
+def test_push_note_says_so_when_no_channel_is_configured(monkeypatch):
+    async def nothing(alert, only=None):
+        return {}
+    monkeypatch.setattr(service, "dispatch", nothing)
+    out = asyncio.run(service.push_note("hello", "world"))
+    assert out["ok"] is False and "no notification channel" in out["error"]
+    assert asyncio.run(service.push_note("", "world"))["ok"] is False

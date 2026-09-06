@@ -50,3 +50,18 @@ def test_stores_listing():
     assert response.status_code == 200
     stores = response.json()["stores"]
     assert any(s["key"] == "bambulab" for s in stores)
+
+
+def test_notify_endpoint_pushes_through_the_alert_channels(monkeypatch):
+    from pricewatch import service
+    sent = []
+
+    async def dispatch(alert, only=None):
+        sent.append(alert)
+        return {"ntfy": "sent"}
+    monkeypatch.setattr(service, "dispatch", dispatch)
+    response = _client().post("/api/notify", json={
+        "title": "watchdog", "message": "LLM endpoint unreachable", "url": ""})
+    assert response.status_code == 200
+    assert response.json()["ok"] is True and response.json()["channels"] == {"ntfy": "sent"}
+    assert sent[-1].body == "LLM endpoint unreachable"

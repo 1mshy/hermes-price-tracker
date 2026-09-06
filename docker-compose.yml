@@ -57,6 +57,18 @@ services:
       # covers dashboard chats too, which the separate gateway container used
       # to keep it away from.
       HERMES_ACCEPT_HOOKS: "1"
+      # The image ships an ntfy *platform* plugin (two-way chat over ntfy, and
+      # `--deliver ntfy` for cron jobs) that switches itself on whenever
+      # NTFY_TOPIC is in the environment — and .env is shared with pricewatch,
+      # whose NTFY_TOPIC is the alerts topic. Left alone, the agent subscribes
+      # to its own alert feed and treats every price alert as a user message.
+      # So the agent listens only on HERMES_NTFY_INBOUND_TOPIC (opt-in; empty
+      # keeps the plugin off) and publishes to the alerts topic.
+      NTFY_TOPIC: ${HERMES_NTFY_INBOUND_TOPIC:-}
+      NTFY_ALLOWED_USERS: ${HERMES_NTFY_INBOUND_TOPIC:-}
+      NTFY_PUBLISH_TOPIC: ${NTFY_TOPIC:-}
+      NTFY_HOME_CHANNEL: ${NTFY_TOPIC:-}
+      NTFY_SERVER_URL: ${NTFY_SERVER:-https://ntfy.sh}
     command: gateway run
     depends_on:
       pricewatch:

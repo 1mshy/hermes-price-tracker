@@ -139,6 +139,10 @@ async def track_url(url: str, *, target_price: float | None = None, drop_pct: fl
         notes = [note] if note else []
         if result.in_stock is False and not alert_on_restock:
             notes.append(_out_of_stock_note(result.store))
+        # A watch created on a coupon price has that as its baseline; say so,
+        # or the first sweep after the coupon lapses looks like a price rise.
+        if result.extra.get("deal_note"):
+            notes.append(result.extra["deal_note"])
         if notes:
             out["note"] = "; ".join(notes)
         return out
@@ -312,6 +316,8 @@ def _upsert_offer(session: Session, product_id: int, result: StoreResult) -> Off
                               else min(offer.lowest_price, result.price))
         offer.last_error = None
         offer.consecutive_errors = 0
+        # Rewritten on every good read: a coupon that lapsed leaves no note.
+        offer.deal_note = result.extra.get("deal_note") or None
         # A stock-only point keeps availability visible in the history.
         if previous is None or previous != result.price or stock_changed:
             session.add(PricePoint(offer=offer, price=result.price,
@@ -463,6 +469,7 @@ def _pending(kind: str, tracker: Tracker, product: Product | None, offer: Offer,
         "store": offer.store, "url": offer.url,
         "baseline": tracker.baseline_price,
         "reasons": reasons, "channels": tracker.channels,
+        "deal_note": offer.deal_note,
     }
 
 
@@ -505,9 +512,14 @@ async def evaluate_trackers() -> list[dict]:
                     else f"**{amount}** at **{item['store']}**")
         # The leading reason doubles as the audit trail's kind marker.
         reasons = ([f"back in stock at {item['store']}"] if restock else []) + item["reasons"]
+        # The note rides along: "CA$49.99" without "after the coupon — clip
+        # it" sends the user to a page whose sticker still says CA$167.73.
+        lines = [headline, *(f"• {r}" for r in item["reasons"])]
+        if item.get("deal_note"):
+            lines.append(f"• {item['deal_note']}")
         alert = Alert(
             title=f"{'📦' if restock else '💸'} {item['title'][:120]}",
-            body="\n".join([headline, *(f"• {r}" for r in item["reasons"])]),
+            body="\n".join(lines),
             url=item["url"],
             price=float(item["price"]),
             old_price=float(item["baseline"]) if item["baseline"] else None,
@@ -537,7 +549,8 @@ async def evaluate_trackers() -> list[dict]:
         await in_db(write)
         sent.append({"kind": item["kind"], "tracker_id": item["tracker_id"],
                      "title": item["title"], "price": float(item["price"]),
-                     "store": item["store"], "reasons": reasons, "channels": outcome})
+                     "store": item["store"], "reasons": reasons, "channels": outcome,
+                     "deal_note": item.get("deal_note")})
         if not delivered:
             log.warning("tracker %s matched but no channel delivered: %s",
                         item["tracker_id"], outcome)
@@ -553,6 +566,7 @@ def _offer_dict(offer: Offer) -> dict:
             "last_checked": offer.last_checked_at.isoformat() if offer.last_checked_at else None,
             "stock_changed_at": offer.stock_changed_at.isoformat() if offer.stock_changed_at else None,
             "last_restocked_at": offer.last_restocked_at.isoformat() if offer.last_restocked_at else None,
+            "deal_note": offer.deal_note,
             "error": offer.last_error,
             "consecutive_errors": offer.consecutive_errors}
 
@@ -583,7 +597,8 @@ async def list_tracked() -> list[dict]:
                 "alert_on_restock": bool(tracker.alert_on_restock),
                 "current_best": (
                     {"price": float(best.last_price), "currency": best.currency,
-                     "store": best.store, "url": best.url}
+                     "store": best.store, "url": best.url,
+                     **({"deal_note": best.deal_note} if best.deal_note else {})}
                     if best and best.last_price is not None else None),
                 "out_of_stock_listings": len(out_of_stock),
                 "channels": tracker.channels or "all configured",
@@ -670,12 +685,20 @@ async def list_alerts(limit: int = 30) -> dict:
         for event in events:
             tracker = session.get(Tracker, event.tracker_id)
             offer = session.get(Offer, event.offer_id) if event.offer_id else None
+            if event.reason.startswith("agent:"):
+                kind = "agent"
+            elif event.reason.startswith("back in stock"):
+                kind = "restock"
+            else:
+                kind = "price"
             rows.append({
                 "id": event.id,
                 "tracker_id": event.tracker_id,
                 "label": tracker.label if tracker else None,
-                "kind": "restock" if event.reason.startswith("back in stock") else "price",
-                "price": float(event.price),
+                "kind": kind,
+                # An agent note need not be about a figure; zero there is "none".
+                "price": (float(event.price)
+                          if kind != "agent" or event.price else None),
                 "reason": event.reason,
                 "store": offer.store if offer else None,
                 "url": offer.url if offer else None,
@@ -686,6 +709,61 @@ async def list_alerts(limit: int = 30) -> dict:
             })
         return rows
     return {"alerts": await in_db(read)}
+
+
+async def push_note(title: str, message: str, *, url: str = "", tracker_id: int | None = None,
+                    price: float | None = None, currency: str = "",
+                    channels: str = "") -> dict:
+    """A notification the agent authored, sent the way the engine's own alerts
+    are and, when it concerns a watch, recorded beside them.
+
+    The scheduled Reddit sweeps used to push through a hand-typed curl to
+    ntfy. That worked, but nothing recorded it, so three days after a coupon
+    deal nobody could say what had been sent, or when. Now the same channels,
+    the same audit trail: list_alerts shows these as kind "agent".
+    """
+    title = " ".join(title.split())[:200]
+    message = message.strip()
+    if not title or not message:
+        return {"ok": False, "error": "title and message are both required"}
+    only = [c.strip() for c in channels.split(",") if c.strip()] or None
+    alert = Alert(
+        title=f"🛎️ {title}",
+        body=message[:3500],
+        url=url.strip() or None,
+        price=price,
+        currency=(currency or preferences.preferred_currency() or "USD").upper(),
+    )
+    outcome = await dispatch(alert, only=only)
+    delivered = any(v == "sent" for v in outcome.values())
+
+    recorded = False
+    if tracker_id is not None:
+        def write(session: Session) -> bool:
+            tracker = session.get(Tracker, tracker_id)
+            if tracker is None:
+                return False
+            session.add(AlertEvent(
+                tracker_id=tracker.id, offer_id=None,
+                price=Decimal(str(price)) if price is not None else Decimal(0),
+                reason=f"agent: {title}"[:300],
+                channels=",".join(outcome.keys()), delivered=delivered,
+                detail=("; ".join(f"{k}={v}" for k, v in outcome.items())
+                        + "\n" + message)[:2000],
+            ))
+            return True
+        recorded = await in_db(write)
+
+    out = {"ok": delivered, "delivered": delivered, "channels": outcome,
+           "recorded_on_tracker": tracker_id if recorded else None}
+    if not outcome:
+        out["error"] = ("no notification channel is configured — set NTFY_TOPIC (or "
+                        "Discord/Signal/WhatsApp) in .env; nothing reached the user")
+    elif not delivered:
+        out["error"] = "every configured channel failed; see channels for the reason"
+    if tracker_id is not None and not recorded:
+        out["note"] = f"tracker {tracker_id} does not exist, so nothing was recorded"
+    return out
 
 
 async def set_tracker(tracker_id: int, **changes) -> dict:

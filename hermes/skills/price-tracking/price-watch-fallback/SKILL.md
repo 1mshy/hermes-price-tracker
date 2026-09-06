@@ -79,10 +79,18 @@ Steps:
 
 ### Delivery caveat
 
-Cron output from a CLI session is local-only — the user sees it on their next
-interaction, not as a push. If they want instant push, a gateway channel
-(Discord/Signal/WhatsApp) must be connected; check `check_notifications` and
-say plainly that none are configured if that's the state.
+A no_agent job's stdout goes only where its `deliver` target points, and
+`local` is a file inside the container — the user sees it on their next
+interaction, not as a push. A watchdog that must reach the user pushes by
+itself: `POST http://pricewatch:8000/api/notify` with `{"title", "message",
+"url"?, "tracker_id"?}` goes through the same channels as the price alerts
+(the ones `check_notifications` reports), and when the engine itself is the
+thing that is down, POST straight to ntfy (`NTFY_PUBLISH_TOPIC` or
+`NTFY_TOPIC`, `NTFY_SERVER`). `templates/pricewatch_health_watchdog.py` does
+both, and also checks the LLM endpoint and the cron jobs' failure streaks —
+an agent that cannot reach its model fails every scheduled sweep silently.
+From an agent-driven job, call `notify_user` instead. Say plainly when no
+channel is configured.
 
 ## 3. Generalizing beyond Amazon
 

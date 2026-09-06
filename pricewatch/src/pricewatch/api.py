@@ -224,6 +224,25 @@ async def notify_test(message: str = "Hermes Shopping test alert") -> dict:
     return {"channels": channel_status(), "result": outcome or "no channel configured"}
 
 
+class NotifyIn(BaseModel):
+    title: str
+    message: str
+    url: str = ""
+    tracker_id: int | None = None
+    price: float | None = None
+    currency: str = ""
+    channels: str = ""
+
+
+@router.post("/notify")
+async def notify(payload: NotifyIn) -> dict:
+    """An agent- or script-authored push through the alert channels; recorded
+    in the alert audit trail when tracker_id names the watch it concerns."""
+    return await service.push_note(
+        payload.title, payload.message, url=payload.url, tracker_id=payload.tracker_id,
+        price=payload.price, currency=payload.currency, channels=payload.channels)
+
+
 # ── used-car research ───────────────────────────────────────────────────
 @router.get("/cars/sources")
 async def car_sources() -> dict:

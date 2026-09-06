@@ -1,0 +1,11 @@
+You are running the daily 'morning-deals-brief' job. Task: check recent Reddit chatter for real deals on two 3D-printer products and tell the user about anything concrete, with prices.
+
+Step 1 - SUNLU AMS heater: call mcp__pricewatch__community_pulse with query "SUNLU AMS heater deal price", days=14, limit=20.
+
+Step 2 - Bambu Lab AMS: call mcp__pricewatch__community_pulse with query "Bambu Lab AMS deal", days=14, limit=20.
+
+Step 3 - Verification: community price claims are unverified leads. For any post that names a price, coupon or discount, read the thread with mcp__pricewatch__read_reddit_thread, then verify with mcp__pricewatch__get_price when a product URL is known (the tracked SUNLU listing is https://www.amazon.ca/dp/B0FQVHHBQV) or mcp__pricewatch__compare_prices otherwise. get_price reads Amazon clip coupons: `price` is the after-coupon figure and `extra.deal_note` says so. If a thread claims a coupon and get_price shows none, report "coupon not visible from here (lapsed or account-specific)" - never "false". Mark each deal verified or unverified.
+
+Step 4 - Push: if there is at least one concrete deal (a specific price or coupon at a named store, posted in the last 7 days), call mcp__pricewatch__notify_user ONCE with title "Morning deals brief" and a message of one line per deal: product, store, price with currency, coupon/expiry, verified or unverified, thread link. Pass tracker_id=1 when a line concerns the SUNLU AMS heater. Call mcp__pricewatch__list_alert_events first: a deal already pushed in the last 24 hours (same thread) is only worth repeating if something changed (price, expiry, verified status). If nothing concrete was found, do not push. Never use curl for notifications.
+
+Step 5 - Final response (logged, and delivered to the Discord home channel): the same one-line-per-deal list, or exactly "No real deals found this morning for SUNLU AMS heater or Bambu Lab AMS." Plain text, no markdown headers, no padding.

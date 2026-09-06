@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from decimal import ROUND_HALF_UP, Decimal
 from urllib.parse import quote_plus
 
 from lxml import html as lxml_html
@@ -16,7 +17,7 @@ from lxml import html as lxml_html
 from .. import matching, preferences
 from ..extract import extract
 from ..fetch import Blocked, fetcher
-from ..money import (currency_for_host, currency_from_text, detect_currency, parse_price,
+from ..money import (currency_for_host, currency_from_text, detect_currency, fmt, parse_price,
                      region_for_host)
 from ..settings import settings
 from .apis import KeepaAmazon
@@ -55,6 +56,157 @@ _ACCESSORY_RE = re.compile(
 # professionals"), and this flag now decides what gets tracked, so a false
 # positive costs a real listing.
 _CONDITION_RE = re.compile(r"\b(renewed|refurbished|pre-?owned|open box)\b", re.I)
+
+# Amazon's clip coupons live *beside* the buy box, not in it: the sticker
+# price stays put and a checkbox takes the money off at checkout. A watch that
+# only read the sticker sat through a CA$167.73 -> CA$49.99 coupon on a tracked
+# listing (2026-09-02) without a flicker, while Reddit was full of it. These
+# are the widgets the coupon renders into, on the desktop and the mobile page.
+_COUPON_REGION_XPATHS = (
+    "//div[@id='promoPriceBlockMessage_feature_div']",
+    "//div[@id='couponsInBuybox_feature_div']",
+    "//div[@id='vpcButton']",
+    "//*[starts-with(@id,'couponText')]",
+    "//*[starts-with(@id,'couponBadge')]",
+    "//*[contains(@class,'couponLabelText')]",
+    "//*[contains(@class,'promoPriceBlockMessage')]",
+)
+# The label wording varies ("Apply $40 coupon", "Save 20% with coupon",
+# "$40 off coupon", French "coupon de 40 $"), so rather than enumerate
+# phrasings, take the figure nearest the word "coupon" in the widget text.
+_COUPON_WORD_RE = re.compile(r"coupon", re.I)
+_COUPON_PCT_RE = re.compile(r"(\d{1,2}(?:[.,]\d)?)\s?%")
+_COUPON_MONEY_RE = re.compile(
+    r"(?:(?:CA|US|AU)?\$|€|£|CAD|USD|EUR|GBP)\s?(\d[\d,]*(?:\.\d{1,2})?)"
+    r"|(\d[\d,]*(?:[.,]\d{1,2})?)\s?(?:\$|€|£)")
+_COUPON_WINDOW = 70
+_NOT_A_COUPON_RE = re.compile(r"subscribe|abonn", re.I)
+
+# Time-boxed markdowns are already in the buy-box price; the badge is what
+# says the figure will not last. Amazon ships the countdown variants as
+# templates ("Limited time deal NO_OF_HOURS hours") beside the rendered one,
+# so a fragment counts only when it is the bare phrase.
+_DEAL_BADGE_RE = re.compile(
+    r"^(limited[- ]time deal|lightning deal|deal of the day|today'?s deal|"
+    r"prime (?:day|big deal days?) deal|black friday deal|cyber monday deal|"
+    r"offre (?:à durée )?limitée)\W*$", re.I)
+_DEAL_REGION_XPATHS = (
+    "//div[@id='dealBadge_feature_div']",
+    "//div[@id='corePriceDisplay_desktop_feature_div']",
+    "//div[@id='corePrice_feature_div']",
+)
+
+
+def _region_text(doc, xpaths: tuple[str, ...]) -> list[str]:
+    """Visible text fragments of the given regions, scripts and styles dropped.
+
+    Amazon's page bundle declares its own UI strings in `a-state` script
+    blocks ("{number} off coupon", "Lightning Deal"), so text_content() on
+    a raw region would find a coupon on every page.
+    """
+    fragments: list[str] = []
+    for xpath in xpaths:
+        for region in doc.xpath(xpath):
+            for junk in region.xpath(".//script|.//style|.//template"):
+                junk.drop_tree()
+            fragments.extend(t.strip() for t in region.itertext() if t and t.strip())
+    return fragments
+
+
+def find_coupon(doc, price: Decimal) -> dict | None:
+    """The clip coupon on a product page, if any, as
+    {"label", "effective", "amount" | "percent"}."""
+    return coupon_in_text(" ".join(_region_text(doc, _COUPON_REGION_XPATHS)), price)
+
+
+def coupon_in_text(text: str, price: Decimal | None) -> dict | None:
+    """The coupon a run of visible text describes, against the sticker price.
+
+    The figure closest to the word "coupon" wins, so "Save 5% with
+    Subscribe & Save" further along the same row cannot pose as one. A
+    money-off coupon larger than the price, or a percentage outside (0, 100),
+    is a misread and is ignored rather than reported as a free product.
+    """
+    if not text or price is None:
+        return None
+    best: tuple[int, str, Decimal] | None = None          # (distance, kind, value)
+
+    def consider(m, kind: str, value: Decimal | None, window: str, anchor: int) -> None:
+        nonlocal best
+        if value is None:
+            return
+        # "Save 5% with Subscribe & Save" is a subscription, whatever sits
+        # next to it: the words between the figure and "coupon", and the
+        # few right after the figure, tell.
+        between = window[min(m.end(), anchor):max(m.start(), anchor)]
+        if _NOT_A_COUPON_RE.search(between) or _NOT_A_COUPON_RE.search(window[m.start():m.end() + 40]):
+            return
+        distance = min(abs(m.start() - anchor), abs(m.end() - anchor))
+        if best is None or distance < best[0]:
+            best = (distance, kind, value)
+
+    for word in _COUPON_WORD_RE.finditer(text):
+        start = max(0, word.start() - _COUPON_WINDOW)
+        window = text[start:word.end() + _COUPON_WINDOW]
+        anchor = word.start() - start
+        for m in _COUPON_PCT_RE.finditer(window):
+            pct = parse_price(m.group(1).replace(",", "."))
+            consider(m, "percent", pct if pct is not None and pct < 100 else None, window, anchor)
+        for m in _COUPON_MONEY_RE.finditer(window):
+            amount = parse_price(m.group(1) or m.group(2))
+            consider(m, "amount", amount if amount is not None and amount < price else None,
+                     window, anchor)
+    if best is None:
+        return None
+    _, kind, value = best
+    cent = Decimal("0.01")
+    if kind == "percent":
+        effective = (price * (Decimal(1) - value / 100)).quantize(cent, ROUND_HALF_UP)
+        return {"percent": float(value), "label": f"{value.normalize():f}% off",
+                "effective": effective}
+    effective = (price - value).quantize(cent, ROUND_HALF_UP)
+    return {"amount": str(value), "label": f"{value} off", "effective": effective}
+
+
+def find_deal_badge(doc) -> str | None:
+    """\"Limited time deal\" and its relatives, when rendered on the page."""
+    for fragment in _region_text(doc, _DEAL_REGION_XPATHS):
+        if "NO_OF_" in fragment:
+            continue                                   # countdown template
+        m = _DEAL_BADGE_RE.match(fragment)
+        if m:
+            return re.sub(r"\s+", " ", m.group(1)).strip().capitalize()
+    return None
+
+
+def find_list_price(doc, price: Decimal) -> Decimal | None:
+    """The struck-through \"Was:\" / \"List Price:\" figure beside the buy box."""
+    for xpath in ("//div[@id='corePriceDisplay_desktop_feature_div']"
+                  "//span[@data-a-strike='true']//span[@class='a-offscreen']/text()",
+                  "//div[@id='corePrice_feature_div']"
+                  "//span[@data-a-strike='true']//span[@class='a-offscreen']/text()"):
+        for hit in doc.xpath(xpath):
+            was = parse_price(hit)
+            if was is not None and was > price:
+                return was
+    return None
+
+
+def deal_note(price: Decimal, currency: str, coupon: dict | None, badge: str | None,
+              list_price: Decimal | None) -> str | None:
+    """One line for the alert and the tracker listing: what the figure rests on."""
+    if coupon:
+        return (f"{fmt(coupon['effective'], currency)} after the on-page coupon "
+                f"({coupon['label']}); sticker price {fmt(price, currency)} — clip the "
+                f"coupon on the product page before checkout. Amazon coupons are "
+                f"time-boxed and can be account-specific.")
+    if badge:
+        if list_price:
+            pct = (Decimal(1) - price / list_price) * 100
+            return (f"{badge}: {fmt(price, currency)} is {pct:.0f}% below the "
+                    f"{fmt(list_price, currency)} list price — time-boxed.")
+        return f"{badge}: {fmt(price, currency)} is a time-boxed markdown."
+    return None
 
 
 def _looks_like_accessory(title: str, query_tokens: set[str]) -> bool:
@@ -113,6 +265,15 @@ def parse_amazon_search(raw: str, storefront: str = "amazon.com",
                                "before quoting it as final"}
         if sponsored:
             extra["sponsored"] = True
+        # Cards carry the coupon as text ("Save $40.00 with coupon"); the price
+        # above is the sticker. get_price on the URL reports the price after it.
+        card_text = " ".join(t.strip() for t in card.itertext() if t.strip())
+        if _COUPON_WORD_RE.search(card_text):
+            coupon = coupon_in_text(card_text, price)
+            if coupon:
+                extra["coupon"] = coupon["label"]
+                extra["note"] += (f"; a {coupon['label']} clip coupon is shown on the card, "
+                                  f"so checkout is about {coupon['effective']}")
         was = next((t for t in card.xpath(".//span[@data-a-strike='true']//text()")
                     if parse_price(t) is not None), None)
         if was:
@@ -137,14 +298,38 @@ class AmazonAdapter(StoreAdapter):
     name = "amazon"
     domains = ("amazon.com", "amazon.ca", "amazon.co.uk", "amazon.de")
 
-    _PRICE_XPATHS = (
-        "//div[@id='corePriceDisplay_desktop_feature_div']//span[@class='a-offscreen']/text()",
-        "//div[@id='corePrice_feature_div']//span[@class='a-offscreen']/text()",
+    # Buy-box containers, then the price spans inside them that are not the
+    # struck-through list price. On a deal page the first `a-offscreen` copy
+    # is blank (the digits sit in a-price-whole/-fraction) and the next one
+    # is \"Was: $349.99\" — which is what got reported as the price.
+    _PRICE_CONTAINERS = (
+        "//div[@id='corePriceDisplay_desktop_feature_div']",
+        "//div[@id='corePrice_feature_div']",
+        "//div[@id='apex_desktop']",
+    )
+    _PRICE_SPAN = ("//span[contains(concat(' ', normalize-space(@class), ' '), ' a-price ') "
+                   "and not(@data-a-strike='true')]")
+    _PRICE_XPATHS = (                                  # older page layouts
         "//span[@id='priceblock_ourprice']/text()",
         "//span[@id='priceblock_dealprice']/text()",
-        "//div[@id='apex_desktop']//span[@class='a-offscreen']/text()",
-        "//span[contains(@class,'apexPriceToPay')]//span[@class='a-offscreen']/text()",
+        "//span[@id='priceblock_saleprice']/text()",
     )
+
+    @staticmethod
+    def _span_price(span) -> tuple[Decimal | None, str]:
+        """(price, text) from an `a-price` span: the a-offscreen copy when it
+        is filled in, else the visible symbol/whole/fraction pieces."""
+        off = " ".join(t.strip() for t in span.xpath(".//span[@class='a-offscreen']/text()")
+                       if t.strip())
+        if off:
+            return parse_price(off), off
+        symbol = "".join(span.xpath(".//span[@class='a-price-symbol']/text()")).strip()
+        whole = "".join(span.xpath(".//span[@class='a-price-whole']/text()")).strip()
+        fraction = "".join(span.xpath(".//span[@class='a-price-fraction']/text()")).strip()
+        if not whole:
+            return None, ""
+        text = f"{symbol}{whole}.{fraction or '00'}"
+        return parse_price(text), text
 
     def _currency_for(self, url: str, price_text: str) -> str:
         """Which money the buy-box figure is in.
@@ -170,10 +355,20 @@ class AmazonAdapter(StoreAdapter):
         # text the figure came with: on .com it is the only currency evidence.
         price = None
         price_text = ""
-        m = _PRICE_AMOUNT_RE.search(page_text[:600_000])
+        # The whole page, not a prefix: on deal pages the buy-box JSON sits
+        # past the 800 KB mark, behind the badge and countdown markup.
+        m = _PRICE_AMOUNT_RE.search(page_text)
         if m:
             price = parse_price(m.group(1))
             price_text = m.group(2)
+        if price is None:
+            for container in self._PRICE_CONTAINERS:
+                for span in doc.xpath(container + self._PRICE_SPAN):
+                    price, price_text = self._span_price(span)
+                    if price:
+                        break
+                if price:
+                    break
         if price is None:
             for xpath in self._PRICE_XPATHS:
                 for hit in doc.xpath(xpath):
@@ -191,6 +386,24 @@ class AmazonAdapter(StoreAdapter):
         currency = self._currency_for(url, price_text)
         native = currency_for_host(host, "USD")
         extra: dict = {}
+        # What the sticker rests on: a clip coupon (the price the user actually
+        # pays is lower), a deal badge (the price will not last), a list price.
+        coupon = find_coupon(doc, price)
+        badge = find_deal_badge(doc)
+        list_price = find_list_price(doc, price)
+        note = deal_note(price, currency, coupon, badge, list_price)
+        if note:
+            extra["deal_note"] = note
+        if badge:
+            extra["deal"] = badge
+        if list_price:
+            extra["list_price"] = str(list_price)
+        if coupon:
+            # The tracker measures `price`, so `price` is what checkout charges;
+            # the sticker stays beside it so the alert can say both.
+            extra["coupon"] = coupon["label"]
+            extra["sticker_price"] = str(price)
+            price = coupon["effective"]
         if currency != native:
             extra["note"] = (
                 f"{host} showed this price in {currency} because the visitor is abroad; "

@@ -65,7 +65,12 @@ mcp = MCPServer("hermes-shopping", instructions=_instructions())
         "platform from bestbuy.com, no key needed), Canada Computers, Spool3D, walmart.ca, "
         "newegg.ca — and the OEMs' ca. storefronts. Prices come back in the store's own "
         "currency (CAD for those). Returns price, currency, stock status and how the price "
-        "was read; `extra.marketplace` true means a third-party seller, not the retailer."
+        "was read; `extra.marketplace` true means a third-party seller, not the retailer. "
+        "On Amazon the clip coupon and deal badge are read too: with a coupon on the page, "
+        "`price` is what checkout charges after it, `extra.sticker_price` is the figure on "
+        "the page, `extra.coupon` the discount, and `extra.deal_note` says so in words — so "
+        "a Reddit '$49.99 with coupon' claim is checked against `price` directly. "
+        "`extra.deal` names a time-boxed markdown ('Limited time deal')."
     )
 )
 async def get_price(url: str) -> dict:
@@ -150,8 +155,9 @@ async def track_product_description(description: str, target_price: float | None
         "current cheapest offer in that currency, out_of_stock_listings (how many in-currency "
         "listings are sold out right now), and every store listing being monitored with its "
         "in_stock state and when it last came back in stock (foreign_listings counts the "
-        "ones in other currencies, which never trigger the watch). Use this before modifying "
-        "or deleting a tracker so you can quote the right tracker_id."
+        "ones in other currencies, which never trigger the watch). A listing's `deal_note` "
+        "says when its price rests on an Amazon clip coupon or a time-boxed deal. Use this "
+        "before modifying or deleting a tracker so you can quote the right tracker_id."
     )
 )
 async def list_trackers() -> dict:
@@ -384,15 +390,35 @@ async def set_sweep_schedule(cron: str) -> dict:
 
 @mcp.tool(
     description=(
-        "Show the most recent fired alerts, newest first: which tracker fired, its `kind` "
-        "('price' for a threshold hit, 'restock' for a listing that came back in stock), at "
-        "what price, why, and whether any notification channel actually delivered it. Use "
-        "this to answer 'has anything triggered?' — especially when no notification "
-        "channels are configured, which makes fired alerts otherwise invisible."
+        "Show the most recent notifications, newest first: which tracker fired, its `kind` "
+        "('price' for a threshold hit, 'restock' for a listing that came back in stock, "
+        "'agent' for a note you sent with notify_user), at what price, why, and whether any "
+        "notification channel actually delivered it. Use this to answer 'has anything "
+        "triggered?' and 'what did you already tell me?' — before pushing about a Reddit "
+        "thread, check here that the same thread was not pushed a few hours ago."
     )
 )
 async def list_alert_events(limit: int = 30) -> dict:
     return await service.list_alerts(limit=limit)
+
+
+@mcp.tool(
+    description=(
+        "Push a message to the user right now through the configured notification "
+        "channels — the same ntfy/Discord/Signal/WhatsApp push the price alerts use. This "
+        "is how a scheduled job tells the user something: a coupon or deal found on Reddit, "
+        "a recurring promo pattern, a store that changed price. Never shell out to curl "
+        "for this. `title` is one short line; `message` is one to three plain-text lines "
+        "with price, currency, store, coupon/expiry and the link; `url` makes the push "
+        "clickable. Pass `tracker_id` when the note concerns a watched product so it is "
+        "recorded in list_alert_events beside the engine's own alerts, and `price` when the "
+        "note is about a specific figure. Returns which channels delivered; `ok` false with "
+        "an `error` when nothing reached the user."
+    )
+)
+async def notify_user(title: str, message: str, url: str = "", tracker_id: int | None = None,
+                      price: float | None = None) -> dict:
+    return await service.push_note(title, message, url=url, tracker_id=tracker_id, price=price)
 
 
 @mcp.tool(

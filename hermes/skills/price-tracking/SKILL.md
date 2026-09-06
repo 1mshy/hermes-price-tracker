@@ -2,7 +2,7 @@
 name: price-tracking
 description: Research prices across tech and 3D-printing retailers, check Reddit deal chatter, and set up price-drop alerts and scheduled checks. Use whenever the user asks what something costs, where it is cheapest, whether a deal is good, mentions a price seen on Reddit, asks to be told when a price falls, or wants to know when something is back in stock.
 metadata:
-  version: 1.6.0
+  version: 1.7.0
 ---
 
 # Price research and tracking
@@ -25,7 +25,8 @@ returns, with the store name and URL beside every figure.
 | "Check right now" | `refresh_prices_now` |
 | "Reddit says people get these for $50" | `community_pulse`, then `read_reddit_thread` |
 | "Check my prices more/less often" | `set_sweep_schedule` |
-| "Did any alert actually fire?" | `list_alert_events` |
+| "Did any alert actually fire?" / "What did you already tell me?" | `list_alert_events` |
+| Tell the user something *now* from a scheduled job | `notify_user` |
 | "Quote me in CAD from now on" | `set_preferred_currency` |
 | "What currency am I set to?" | `get_preferred_currency` |
 | "How fresh is that conversion?" / "Where did that ≈ figure come from?" | `get_exchange_rates` |
@@ -141,8 +142,8 @@ unavailable item is not a deal — and switch it on with
 `list_trackers` reports `out_of_stock_listings` per watch.
 
 Call `check_notifications` if the user is unsure whether alerts will reach them;
-it reports which of Discord / Signal / WhatsApp are configured and can send a
-test message. When **no channel is configured**, alerts still fire and are
+it reports which of ntfy / Discord / Signal / WhatsApp are configured and can
+send a test message. When **no channel is configured**, alerts still fire and are
 recorded — surface them with `list_alert_events` — but nothing pushes to the
 user. Say that plainly when you create a watch in that state.
 
@@ -162,6 +163,26 @@ Community prices are unverified leads. Confirm with `get_price` before
 repeating one, and distinguish a time-boxed coupon ("$50 off until Monday,
 Amazon US only") from a standing price — the difference decides whether the
 right move is "buy now" or "set a tracker".
+
+### Coupons and deal badges
+
+Amazon's clip coupons sit *beside* the buy box: the sticker stays put and a
+checkbox takes the money off at checkout. `get_price` reads them. When a
+coupon is on the page, `price` is what checkout charges after it,
+`extra.sticker_price` is the figure on the page, `extra.coupon` the discount
+("117.74 off", "20% off") and `extra.deal_note` says all of that in words;
+`extra.deal` names a time-boxed markdown ("Limited time deal") and
+`extra.list_price` the struck-through figure. Trackers measure `price`, so a
+coupon that takes a watched listing under its target fires the watch, and the
+alert carries the note — the user must clip the coupon on the page to get it.
+
+So a Reddit "$49.99 with coupon" claim is checked against `price` directly.
+When `get_price` shows no coupon, say "the coupon is not visible from here
+(lapsed, or account-specific)" — not that the claim is false. Amazon coupons
+are time-boxed, sometimes account-specific, and recur: the same ~$50 clip on
+the Sunlu AMS heater came back three times in two weeks. A recurring coupon
+that just expired is still worth one line to the user ("it comes back every
+few days; the tracker will fire next time it shows from here").
 
 ## Scheduling: trackers first, cron jobs second
 
@@ -184,12 +205,27 @@ job shows as scheduled with a next-run time. If the cronjob tool is not
 available in your session, say so — do not silently fall back to pretending a
 watch exists.
 
-Delivery honesty: cron output without a connected messaging platform is
-**local-only** (`hermes cron runs` shows it; the user sees results on their
-next chat, not as a push). Pricewatch tracker alerts push only through the
-channels `check_notifications` reports as configured. Whenever you set up
-either kind of schedule, state exactly how — and whether — the user will be
-notified.
+Delivery honesty: a cron job's *final response* only goes where its
+`deliver` target points. `local` is a file inside the container (`hermes cron
+runs` shows it) — the user never sees it as a push, and for twelve days a
+morning briefing found deals and delivered them to that file. To reach the
+user from a scheduled job, call **`notify_user`**: it pushes through the same
+channels as the price alerts (ntfy, Discord, Signal, WhatsApp — whatever
+`check_notifications` reports) and, with `tracker_id`, is recorded in
+`list_alert_events` as kind `agent`, so the next run can see what was already
+sent. Never shell out to `curl` for a notification. A job can additionally be
+created with `deliver=discord` when the Discord gateway is connected, which
+posts its final response to the home channel without relying on the model.
+Whenever you set up either kind of schedule, state exactly how — and whether —
+the user will be notified.
+
+Push policy for scheduled sweeps: a concrete price or coupon claim about a
+watched product that is less than a day old is worth a push even when it
+could not be verified live (say "unverified" and "reported expired" as
+appropriate) — the user would rather hear about a recurring coupon early than
+after it lapsed. Check `list_alert_events` first and do not push the same
+thread twice unless something changed. Standing prices the tracker already
+watches are not news.
 
 ## How the engine fetches (don't reinvent it)
 

@@ -321,3 +321,94 @@ def test_keepa_asks_the_marketplace_the_link_points_at(monkeypatch):
     assert result.currency == "CAD"
     assert result.url == "https://www.amazon.ca/dp/B0FQVHHBQV"
     assert result.price == Decimal("167.73")
+
+
+# ── product page: clip coupons and deal badges ───────────────────────────
+# The tracker only ever read the sticker, so a CA$167.73 → CA$49.99 coupon on
+# a watched listing (2026-09-02) never fired. The price the tracker measures is
+# now the price after the coupon, with the sticker kept beside it.
+PDP = (FIXTURES / "amazon_pdp_coupon.html").read_text()
+COUPON_LABEL = "Apply $117.74 coupon"
+
+
+def _coupon_pdp(text=PDP, **swap):
+    for old, new in swap.items():
+        text = text.replace({"label": COUPON_LABEL, "badge": "<!--BADGE-->",
+                             "strike": "<!--STRIKE-->"}[old], new)
+    return AmazonAdapter()._parse("https://www.amazon.ca/dp/B0FQVHHBQV", text, "B0FQVHHBQV")
+
+
+def test_clip_coupon_is_taken_off_the_sticker_price():
+    r = _coupon_pdp()
+    assert r.price == Decimal("49.99")
+    assert r.currency == "CAD" and r.in_stock is True
+    assert r.extra["coupon"] == "117.74 off"
+    assert r.extra["sticker_price"] == "167.73"
+    assert "CA$49.99" in r.extra["deal_note"] and "CA$167.73" in r.extra["deal_note"]
+    assert "clip the coupon" in r.extra["deal_note"]
+
+
+def test_percent_coupon_is_applied():
+    r = _coupon_pdp(label="Save 20% with coupon")
+    assert r.price == Decimal("134.18")               # 167.73 × 0.8, rounded
+    assert r.extra["coupon"] == "20% off"
+
+
+def test_the_figure_nearest_the_word_coupon_wins():
+    # "Save 5% with Subscribe & Save" on the same row is not the coupon.
+    r = _coupon_pdp(label=COUPON_LABEL + '</span><span class="a-size-small">Save 5% with Subscribe &amp; Save')
+    assert r.price == Decimal("49.99")
+
+
+def test_subscribe_and_save_beside_a_bare_coupon_badge_is_not_a_coupon():
+    r = _coupon_pdp(label="Save 5% with Subscribe &amp; Save")
+    assert r.price == Decimal("167.73")
+    assert "coupon" not in r.extra
+
+
+def test_a_promotion_without_a_coupon_is_ignored():
+    # Real text from an amazon.ca listing: the promo widget with no coupon in it.
+    r = _coupon_pdp(label="Offer</span><span>90 days free of Amazon Music with purchase</span><span>Terms")
+    assert r.price == Decimal("167.73")
+    assert "coupon" not in r.extra and "deal_note" not in r.extra
+
+
+def test_page_bundle_strings_are_not_a_coupon():
+    # The a-state script declares "{number} off coupon" on every page.
+    r = _coupon_pdp(label="")
+    assert r.price == Decimal("167.73")
+    assert "coupon" not in r.extra
+
+
+def test_a_coupon_larger_than_the_price_is_a_misread():
+    r = _coupon_pdp(label="Apply $200 coupon")
+    assert r.price == Decimal("167.73")
+    assert "coupon" not in r.extra
+
+
+def test_deal_badge_and_list_price_are_reported():
+    r = _coupon_pdp(label="",
+             badge='<span>Limited time deal NO_OF_HOURS hours</span>'
+                   '<span class="dealBadgeTextColor">Limited time deal</span>',
+             strike='<span class="a-price a-text-price" data-a-size="s" data-a-strike="true">'
+                    '<span class="a-offscreen">$349.99</span><span aria-hidden="true">$349.99</span></span>')
+    assert r.price == Decimal("167.73")
+    assert r.extra["deal"] == "Limited time deal"
+    assert r.extra["list_price"] == "349.99"
+    assert "52% below the CA$349.99 list price" in r.extra["deal_note"]
+
+
+def test_countdown_templates_alone_are_not_a_deal():
+    r = _coupon_pdp(label="", badge='<span>Limited time deal NO_OF_HOURS hours NO_OF_MINUTES minutes</span>')
+    assert "deal" not in r.extra
+
+
+def test_search_card_coupon_is_flagged_but_the_sticker_is_kept():
+    raw = ('<div data-component-type="s-search-result" data-asin="B0FQVHHBQV">'
+           '<h2 aria-label="SUNLU AMS Heater"></h2>'
+           '<span class="a-price"><span class="a-offscreen">$167.73</span></span>'
+           '<span class="s-coupon-unclipped">Save $117.74 with coupon</span></div>')
+    [r] = parse_amazon_search(raw, storefront="amazon.ca", currency="CAD")
+    assert r.price == Decimal("167.73")
+    assert r.extra["coupon"] == "117.74 off"
+    assert "49.99" in r.extra["note"]

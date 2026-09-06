@@ -56,6 +56,12 @@ class Offer(Base):
     stock_changed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_restocked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     method: Mapped[str | None] = mapped_column(String(50), nullable=True)   # how we read it
+    # What last_price rests on when it is not the plain sticker: an Amazon
+    # clip coupon (last_price is the after-coupon figure), a time-boxed deal
+    # badge. Rewritten on every successful read; None when there is nothing
+    # to say. Goes out with the alert so "CA$49.99" arrives with "clip the
+    # coupon" beside it.
+    deal_note: Mapped[str | None] = mapped_column(String(400), nullable=True)
     last_checked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     consecutive_errors: Mapped[int] = mapped_column(Integer, default=0)

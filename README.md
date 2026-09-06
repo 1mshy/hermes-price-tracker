@@ -254,6 +254,20 @@ amazon.com shows a Canadian visitor a *converted* figure that reads CAD on one
 fetch and USD on the next — which is why a pasted Amazon link is registered on
 the regional marketplace (amazon.ca) whenever the ASIN resolves there.
 
+**Coupons count.** Amazon's clip coupons sit beside the buy box — the sticker
+stays put and a checkbox takes the money off at checkout — so a watch that
+only read the sticker sat through a CA$167.73 → CA$49.99 coupon on the Sunlu
+AMS heater (September 2026) without a flicker. The Amazon adapter now reads
+the coupon widget and the deal badge: with a coupon on the page, the price the
+tracker measures is the after-coupon figure, `extra.sticker_price` keeps the
+sticker, and a `deal_note` ("CA$49.99 after the on-page coupon … clip it before
+checkout") is stored on the listing, shown by `list_trackers`, and printed in
+the alert. Limited-time deals are annotated the same way (`extra.deal`,
+`extra.list_price`). Coupons are time-boxed and can be account-specific: what
+the engine sees from its own address is what it reports. The same change also
+fixed deal pages reporting the struck-through *list* price instead of the sale
+price, which newer Amazon markup made possible.
+
 Alerts are deduplicated by a per-tracker cooldown (default 12 h) that is bypassed
 only when the price falls *further* than the last alert; once it expires, a
 repeat goes out only if the price has moved since the last one, so a slow slide
@@ -287,6 +301,10 @@ the agent *"can you send me a test alert?"*.
 Every fired alert is also recorded whether or not a channel delivered it —
 `list_alert_events` (or `GET /api/alerts`) is the audit trail, which matters
 when no channel is configured yet and alerts would otherwise be invisible.
+The agent's own pushes go through the same door: the `notify_user` tool
+(`POST /api/notify`) sends through every configured channel and, given a
+`tracker_id`, lands in the same trail as kind `agent` — so "what did you
+already tell me, and when?" has one answer.
 
 The sweep cadence itself is live-adjustable: the agent's `set_sweep_schedule`
 tool (or `PATCH /api/schedule`) takes a 5-field UTC cron expression, refuses
@@ -399,8 +417,13 @@ schedule. Hermes cron is for what the engine can't do alone: a morning Reddit
 deals briefing, or a silent no-LLM watchdog script for a store the engine
 reports as blocked (see `hermes/skills/price-tracking/price-watch-fallback/`,
 which also ships `templates/pricewatch_health_watchdog.py` — a silent 6-hourly
-job that speaks up only when the engine is down or a tracked listing has
-failed 3+ sweeps in a row).
+job that speaks up only when the engine is down, sweeps have stalled, a
+tracked listing has failed 3+ sweeps in a row, **the LLM endpoint is not
+answering**, or a cron job has failed twice running — and pushes that report
+itself, through the engine's channels or straight to ntfy when the engine is
+what is down. The LLM check exists because the local model was unreachable for
+54 hours in September 2026: eight Reddit sweeps in a row failed, nothing said
+so, and a coupon on a watched product came and went).
 
 Schedule syntax matters: `"6h"` means **once**, in six hours. For recurring
 jobs use a cron expression (`"0 */6 * * *"`) — `hermes cron list` shows
@@ -420,6 +443,13 @@ Two pieces make agent-created cron jobs actually work, and both are wired into
    Note this now applies to dashboard chats too, which the old separate gateway
    container kept it away from.
 
+The prompts of the two LLM-driven jobs (`morning-deals-brief`, the Sunlu
+community sweep) are kept in `hermes/cron-prompts/`; jobs themselves live in
+the agent-home volume, so after editing a prompt re-apply it with
+`hermes cron edit <job-id> --prompt "$(cat /opt/data/workspace/<file>)"`
+(copy the file into `workspace/` first — that is the bind mount the container
+can read).
+
 Useful commands:
 
 ```bash
@@ -428,10 +458,17 @@ docker compose exec hermes hermes cron runs     # execution history
 docker compose exec hermes hermes cron status   # is the ticker alive
 ```
 
-Delivery: with no messaging platform connected, job output is local-only (the
-user sees it on their next chat; `cron runs` shows it). Connect a platform
-with `hermes gateway setup` for push delivery — or just use pricewatch
-trackers, which push through Discord/Signal/WhatsApp on their own.
+Delivery: a job's final response goes only where its `deliver` target points,
+and `local` is a file in the container (`cron runs` shows it) — a morning
+briefing ran that way for twelve days, finding deals nobody saw. Two ways out:
+the job's prompt calls the engine's `notify_user` tool for anything worth a
+push (same channels as the alerts, recorded in the alert trail), and/or the
+job is created with `--deliver discord` (or `telegram`, `signal`…) once that
+gateway platform is connected, which posts the response to the home channel
+without relying on the model. The ntfy *platform* (the agent listening on a
+topic, `--deliver ntfy`) is opt-in via `HERMES_NTFY_INBOUND_TOPIC`: it must be
+a different topic from the alerts one, or the agent reads its own alerts as
+user messages.
 
 ## Model configuration
 
