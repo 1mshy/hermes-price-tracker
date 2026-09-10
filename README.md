@@ -537,13 +537,23 @@ package against your working tree** and fails loudly if they differ.
 ```bash
 ./scripts/rebuild.sh                 # pricewatch (the usual case)
 ./scripts/rebuild.sh agent           # the hermes container (hermes/ changes)
-./scripts/rebuild.sh all             # everything
+./scripts/rebuild.sh all             # pricewatch + hermes (+ signal-cli if enabled)
+./scripts/rebuild.sh all --force     # all-in-one: rebuild both images, restart every container
+./scripts/rebuild.sh --force         # restart the targets even if nothing changed
 ./scripts/rebuild.sh --smoke         # also run scripts/agent-smoke.sh
+./scripts/rebuild.sh --dry-run       # show what compose would do; no build, no restart
 ```
 
 After a pricewatch rebuild the script also recreates `hermes`, whose open
 dashboard session otherwise holds an MCP stream to the container that just went
-away.
+away. `docker compose up` only recreates a container whose image or config
+changed, so a plain run leaves an untouched container alone; `--force` restarts
+every target regardless, which is the one command to use when you want the
+whole stack rebuilt and restarted. `agent` builds with `--no-deps` on purpose:
+compose otherwise rebuilds pricewatch as a dependency of hermes, which would
+deploy untested engine code with no drift check. The hermes image gets the same
+after-build check as pricewatch — skills, dashboard themes and the init hook are
+hashed inside the container and diffed against `hermes/`.
 
 ### Upgrading the agent
 
