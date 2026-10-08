@@ -1,0 +1,21 @@
+[
+  {
+    "key": "target",
+    "label": "Target",
+    "kind": "selector",
+    "tags": [
+      "tech"
+    ],
+    "status": "OK",
+    "url": "https://www.target.com/p/-/A-85978609",
+    "discovery": "catalog-seed",
+    "price": 199.99,
+    "currency": "USD",
+    "in_stock": null,
+    "method": "browser:selector",
+    "title": "Apple AirPods Pro 3 Wireless Earbuds with Active Noise Cancellation",
+    "error": null,
+    "searchable": false,
+    "seconds": 13.9
+  }
+]

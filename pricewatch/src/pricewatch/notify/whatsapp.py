@@ -5,7 +5,7 @@ from urllib.parse import quote
 
 from ..fetch import fetcher
 from ..settings import settings
-from .base import Alert, Channel
+from .base import Alert, Channel, check_response, DeliveryError
 
 
 class TwilioWhatsAppChannel(Channel):
@@ -31,8 +31,7 @@ class TwilioWhatsAppChannel(Channel):
                 auth=(settings.twilio_account_sid, settings.twilio_auth_token),
                 timeout=30,
             )
-            if response.status_code >= 300:
-                raise RuntimeError(f"twilio {response.status_code}: {response.text[:200]}")
+            check_response(response, "twilio")
 
 
 class CallMeBotWhatsAppChannel(Channel):
@@ -53,4 +52,4 @@ class CallMeBotWhatsAppChannel(Channel):
         )
         page = await fetcher.get(endpoint)
         if page.status >= 300:
-            raise RuntimeError(f"callmebot {page.status}: {page.text[:200]}")
+            raise DeliveryError("callmebot", page.status, page.text)

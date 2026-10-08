@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from ..fetch import fetcher
 from ..settings import settings
-from .base import Alert, Channel
+from .base import Alert, Channel, check_response
 
 
 class SignalChannel(Channel):
@@ -30,5 +30,4 @@ class SignalChannel(Channel):
             },
             timeout=30,
         )
-        if response.status_code >= 300:
-            raise RuntimeError(f"signal-cli {response.status_code}: {response.text[:200]}")
+        check_response(response, "signal-cli")

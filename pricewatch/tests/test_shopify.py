@@ -270,3 +270,25 @@ def test_suggest_urls_lose_their_search_attribution():
     assert (_canonical_product_url("https://west3d.com/products/x?variant=42&_pos=2")
             == "https://west3d.com/products/x?variant=42")
     assert _canonical_product_url("https://west3d.com/products/x") == "https://west3d.com/products/x"
+
+
+def test_dns_failure_does_not_cache_the_wrong_currency_for_the_rest_of_the_process(monkeypatch):
+    answers = [OSError('DNS asleep'), {'currency': 'CAD'}]
+    async def get_json(url):
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    monkeypatch.setattr(shopify.fetcher, 'get_json', get_json)
+    assert asyncio.run(shopify.market_currency('https://canadian-shop.com', 'USD')) == 'USD'
+    assert asyncio.run(shopify.market_currency('https://canadian-shop.com', 'USD')) == 'CAD'
+    assert answers == []
+
+
+def test_market_discovery_recovers_after_wake(monkeypatch):
+    monkeypatch.setattr(shopify.preferences, 'preferred_currency', lambda: 'CAD')
+    monkeypatch.setattr(shopify.preferences, 'preferred_region', lambda: 'CA')
+    _patch_json(monkeypatch, {})
+    assert asyncio.run(shopify.preferred_market('shop.example.com', 'USD')) == ''
+    _patch_json(monkeypatch, {'https://shop.example.com/en-ca/cart.js': {'currency': 'CAD'}})
+    assert asyncio.run(shopify.preferred_market('shop.example.com', 'USD')) == '/en-ca'

@@ -43,6 +43,46 @@ Then just talk to it:
 > *"Check my tracked prices every 15 minutes instead."*
 > *"What am I tracking, and has anything moved?"*
 
+## Add products without a conversation
+
+Open **[your watchlist](http://localhost:8077/watchlist)**. Paste a product link
+or type a product name; add several products by putting one on each line. Saving
+is immediate and does not need the model server. Hermes looks up prices in the
+background, keeps the watch across restarts, and retries unavailable retailers
+on later sweeps. Repeated submissions reuse an existing watch and keep its rules.
+
+The default alert is a **5% drop** from the first verified price. You can set a
+target price or restock alert before adding, or edit the rule later. The page
+shows pending, watching, retrying and paused items, listing links, currencies,
+check times, and last known prices. Pause and resume items there too. A target
+on a URL uses its actual listing currency; a name search uses your preferred
+currency. Failed or sold-out listings cannot trigger a price-deal alert.
+
+In chat, “watch this” uses the same `add_watch` tool and saves immediately; it
+does not require a target-price interview. `POST /api/trackers` accepts
+`{"input":"product URL or name"}` with optional `target_price`, `drop_pct` and
+`alert_on_restock` fields. The original URL/query API endpoints remain available.
+
+## Quiet, useful background work
+
+Routine checks, unchanged prices, empty results and transient failures stay
+local. The morning brief and community sweep send a push only for a new,
+actionable buying opportunity. Their scheduler delivery is local, so a failed
+model connection no longer produces an additional channel message. Container
+startup upgrades the known shopping jobs while preserving schedules and custom
+product instructions.
+
+Price checks and new-product lookups run independently of the model. Unresolved
+name searches retry on each sweep; healthy name watches search for more listings
+daily. Watches whose listings repeatedly fail also try alternative retailers,
+at most daily. A failed read retains its history but cannot trigger a deal alert.
+
+The health watchdog first tries to restore a missed sweep using the existing
+schedule. A persistent incident is reported once after two observations, and
+does not repeat until it has recovered and failed again. A blocked alternative
+retailer is not reported when another listing still covers the watch. Local
+diagnostics are saved in `$HERMES_HOME/cron/health_watchdog_status.json`.
+
 ## Browser dashboard
 
 Hermes ships its own web UI — chat with the agent, browse past sessions, and edit
@@ -98,51 +138,79 @@ docker compose restart hermes         # pick up .env changes
 ## What actually works
 
 Verified live against every store in the catalog (`docker compose exec pricewatch
-python -m pricewatch.verify`). Latest full run (2026-08-27): **27 of 39 stores returned a live price** (the rest: 4 documented IP-reputation walls, 1 keyless API, 1 search-only marketplace, and stores with no machine-readable price). The nine Canadian stores added on 2026-09-03 were verified separately: 8 of 9 read a live CAD price (Memory Express is IP-walled), for 48 stores in the catalog.
+python -m pricewatch.verify`). Latest full run (2026-09-19 UTC): **37 of 48 stores returned a product price**, up from 33. Seven shops returned access challenges, Best Buy US needs a key, AliExpress and LDO have explicit tracking limitations, and Gulf Coast's hostname did not resolve. Repeated Amazon and Walmart checks, forced Chromium tests and real browser crash/session recovery are documented in `reports/2026-09-19-retailer-reliability.md`. These are point-in-time observations from this Docker host, not a promise that every product remains readable.
 
-**Working without any API key (30 of them 3D printing):**
+**Available extraction routes (live access varies by retailer):**
 
 | | |
 |---|---|
-| **Shopify JSON** (exact price, in-stock, variants) | Elegoo · Anycubic · Printed Solid · E3D · Slice Engineering · Micro Swiss · West3D · Fabreeko · Filastruder · QIDI · Sovol · Polymaker · Proto-pasta · Atomic Filament · Overture · Fillamentum · **Voxel Factory · 3D Printing Canada · Filaments.ca · DigitMakers · Shop3D.ca** (all CAD) · Creality's `ca.` market |
-| **schema.org JSON-LD over fingerprinted HTTP** | Bambu Lab · Prusa · Creality · B&H Photo · DigiKey |
+| **Shopify JSON** (exact price, in-stock, variants) | Elegoo · Anycubic · Printed Solid · E3D · Slice Engineering · Micro Swiss · West3D · Fabreeko · Filastruder · QIDI · Sovol · Polymaker · Proto-pasta · Atomic Filament · Overture · Fillamentum · SUNLU · **Voxel Factory · 3D Printing Canada · Filaments.ca · DigitMakers · Shop3D.ca** (all CAD) · Creality's `ca.` market |
+| **schema.org JSON-LD over fingerprinted HTTP** | Bambu Lab · Prusa · Creality · B&H Photo · DigiKey (last two blocked in the latest live run) |
 | **Keyless retailer JSON API** (bestbuy.ca is a different platform from bestbuy.com) | Best Buy Canada — exact price, stock, sale end date, third-party sellers flagged `marketplace` |
 | **schema.org JSON-LD over plain HTTP** (PrestaShop / BigCommerce, CAD) | Canada Computers (product pages + parsed search cards) · Spool3D |
-| **Fingerprinted HTTP + DOM/buy-box** | Amazon · Walmart · Newegg · 3DJake |
-| **Headless browser + JSON-LD** | MatterHackers · TH3D |
+| **Fingerprinted HTTP + DOM/buy-box** | Amazon · Walmart · Newegg · 3DJake · Memory Express (CAD) |
+| **Headless browser + JSON-LD** | MatterHackers · TH3D · Target (DOM) |
 
 **The fast path is a browser TLS fingerprint.** Retail bot walls (Cloudflare,
 Akamai, Amazon) fingerprint the TLS handshake and HTTP/2 settings, not the header
 set — so plain `httpx` gets challenged even with perfect headers. The engine
 sends a real Chrome fingerprint (via `curl_cffi`, `PW_IMPERSONATE`), which clears
-most walls in ~1s with no browser. **Amazon, Walmart, Newegg, B&H and DigiKey now
-read over HTTP with no key and no proxy.** A headless browser is the fallback for
-genuinely JS-rendered pages only.
+most walls in ~1s with no browser. **Amazon, Walmart and Newegg returned prices without a key or proxy in
+the latest run.** B&H and DigiKey, which worked previously, currently return
+access challenges from this host. A headless browser also retries challenged pages and pages whose price
+only appears after JavaScript runs.
 
-**Marketplaces** — eBay now reads keylessly (fingerprinted HTTP + JSON-LD on
-item pages, HTML parsing for search); `EBAY_APP_ID` + `EBAY_CERT_ID` remain the
+**Marketplaces** — eBay supports a keyless adapter (fingerprinted HTTP + JSON-LD
+on item pages, HTML parsing for search), but the latest verifier could not
+discover a readable product URL; `EBAY_APP_ID` + `EBAY_CERT_ID` remain the
 most reliable path. AliExpress is **search-only**: `compare_prices` returns live
 prices from its search page (often the cheapest source — OEMs like SUNLU sell
 direct), in whichever currency `PW_PREFERRED_CURRENCY` pins the locale to, but
 product pages block automated reads, so AliExpress listings cannot be tracked
 and the tools say so instead of failing silently.
 
-**Needs a free API key** — Best Buy (`BESTBUY_API_KEY`) requires its key.
-`KEEPA_API_KEY` makes Amazon bulletproof but is no longer required for everyday
-lookups.
+**Retailer recovery and fallbacks** — SUNLU uses its actual Shopify store at
+`store.sunlu.com`, including recovery for renamed product handles. KB-3D product
+discovery starts under `/store/`. Memory Express uses its main CAD price
+container. Target waits for its client-rendered product price. Configurator
+ranges and unrelated recommendation prices are not treated as exact quotes.
 
-**Still IP-walled** — Micro Center, Adorama, Mouser, Target, Memory Express key on IP reputation
-and reject even a real browser from a datacenter address. Point `PW_HTTP_PROXY`
-at a residential proxy; the adapters use it the moment it is configured, and until
-then they fail fast with a clear reason instead of stalling on Chromium.
+**Official and managed APIs** — Best Buy US requires `BESTBUY_API_KEY`; eBay
+supports approved `EBAY_APP_ID` / `EBAY_CERT_ID` credentials. Amazon first reads
+the product page, with Keepa as an optional paid fallback. Keepa requests a
+refresh, checks product identity and observation age, and reports its price
+basis. No third-party service makes storefront availability unconditional.
 
-The engine caches which rung worked per host (a fetch "playbook", visible in
-`engine_status`), so repeat lookups skip straight to it instead of re-probing —
-the agent never has to rediscover how to reach a store.
+An additional **opt-in SerpApi product fallback** supports Amazon's configured
+markets and **walmart.com only**. Set `SERPAPI_KEY` and
+`PW_RETAIL_SERPAPI_ENABLED=true` to enable it. It runs only after direct access
+fails, requests uncached data, validates the item and timestamp, and uses one
+provider request per fallback. It may consume paid credits. Walmart Canada is
+never substituted with a US quote. Provider integrations have contract tests;
+without configured credentials their live operation is unverified.
 
-**Not supported** — SUNLU, KB-3D, LDO Motors, Siboor, Gulf Coast Robotics publish
-no machine-readable price (or block outright). They stay in the catalog so a
-pasted URL gets a clear error rather than a silent miss.
+**Access restrictions** — eBay, B&H, Micro Center, Adorama, Siboor, DigiKey and
+Mouser have returned challenges through both HTTP and Chromium on this host.
+`PW_HTTP_PROXY` applies to both transports, including proxy authentication in
+Chromium. A suitable proxy or approved API can provide another route, but access
+must be tested with that service. DigiKey and Mouser have official product APIs;
+those two integrations are not implemented here. LDO's site is a manufacturer
+catalog; use its resellers for retail quotes. Gulf Coast's domain did not resolve
+in the latest investigation.
+
+The engine remembers successful transport choices for one day and unsuccessful
+browser attempts for five minutes, then probes again. Missing products,
+rate-limit/server errors and a disabled browser do not permanently block a
+store. Chromium runs at most two navigations at once, retains up to eight
+storefront contexts, saves dedicated anonymous sessions under
+`data/browser_sessions/`, and relaunches after losing its browser connection.
+`PW_BROWSER_STATE_DIR=off` disables session persistence. Settings are documented
+in `.env.example`; there is no access to your personal browser profile.
+
+Read the retailer investigation in `reports/2026-09-19-retailer-reliability.md`.
+The repeatable smoke runner `scripts/retailer-smoke.py` checks multiple products,
+forces browser fallbacks and verifies session/crash recovery. It disables paid
+APIs and uses temporary state; it does not create watches or send notifications.
 
 `list_stores` (or `GET /api/stores`) reports each store's method and limitation,
 so the agent can explain gaps instead of quietly dropping a retailer.
@@ -151,7 +219,7 @@ so the agent can explain gaps instead of quietly dropping a retailer.
 
 Preference order, per store — cheapest and most reliable first:
 
-1. **Official API** — Best Buy, eBay, Keepa. Allowed, stable, no scraping.
+1. **Official API** — Best Buy and eBay when credentials are configured; Best Buy Canada uses its public product endpoint.
 2. **Platform JSON** — Shopify `/products/<handle>.js` (falling back to the
    older `.json` view on themes that gate it), WooCommerce Store API.
    Public storefront endpoints, exact prices in minor units, no HTML parsing.
@@ -161,8 +229,9 @@ Preference order, per store — cheapest and most reliable first:
    retailers and clears most bot walls without a browser.
 4. **Headless Chromium** — only when the price is rendered client-side or a wall
    fingerprints deeper than TLS.
-5. **Residential proxy** — the last resort for IP-reputation walls, via
-   `PW_HTTP_PROXY`.
+5. **Optional fallback providers** — fresh Keepa data for Amazon, or explicitly
+   enabled SerpApi product data for Amazon and Walmart US. `PW_HTTP_PROXY`
+   routes both HTTP and Chromium when configured.
 
 The cheapest rung that works for each host is cached in a per-host playbook, so
 subsequent reads start there. Requests are rate-limited per hostname
@@ -417,13 +486,12 @@ schedule. Hermes cron is for what the engine can't do alone: a morning Reddit
 deals briefing, or a silent no-LLM watchdog script for a store the engine
 reports as blocked (see `hermes/skills/price-tracking/price-watch-fallback/`,
 which also ships `templates/pricewatch_health_watchdog.py` — a silent 6-hourly
-job that speaks up only when the engine is down, sweeps have stalled, a
-tracked listing has failed 3+ sweeps in a row, **the LLM endpoint is not
-answering**, or a cron job has failed twice running — and pushes that report
-itself, through the engine's channels or straight to ntfy when the engine is
-what is down. The LLM check exists because the local model was unreachable for
-54 hours in September 2026: eight Reddit sweeps in a row failed, nothing said
-so, and a coupon on a watched product came and went).
+job that attempts recovery and speaks up once per persistent incident: the
+engine is down, sweeps remain stalled, an entire watch has no working listing,
+the model endpoint is unavailable, or a research job repeatedly fails. It
+confirms the incident across two observations and pushes through the engine's
+channels, or directly to ntfy when the engine is down. Model availability and
+price monitoring are reported separately).
 
 Schedule syntax matters: `"6h"` means **once**, in six hours. For recurring
 jobs use a cron expression (`"0 */6 * * *"`) — `hermes cron list` shows
@@ -445,10 +513,9 @@ Two pieces make agent-created cron jobs actually work, and both are wired into
 
 The prompts of the two LLM-driven jobs (`morning-deals-brief`, the Sunlu
 community sweep) are kept in `hermes/cron-prompts/`; jobs themselves live in
-the agent-home volume, so after editing a prompt re-apply it with
-`hermes cron edit <job-id> --prompt "$(cat /opt/data/workspace/<file>)"`
-(copy the file into `workspace/` first — that is the bind mount the container
-can read).
+the agent-home volume. Rebuild the agent after editing a template. Startup
+updates managed templates and applies quiet delivery to the known shopping
+jobs, preserving schedules, disabled status and user-customized prompts.
 
 Useful commands:
 
@@ -458,14 +525,11 @@ docker compose exec hermes hermes cron runs     # execution history
 docker compose exec hermes hermes cron status   # is the ticker alive
 ```
 
-Delivery: a job's final response goes only where its `deliver` target points,
-and `local` is a file in the container (`cron runs` shows it) — a morning
-briefing ran that way for twelve days, finding deals nobody saw. Two ways out:
-the job's prompt calls the engine's `notify_user` tool for anything worth a
-push (same channels as the alerts, recorded in the alert trail), and/or the
-job is created with `--deliver discord` (or `telegram`, `signal`…) once that
-gateway platform is connected, which posts the response to the home channel
-without relying on the model. The ntfy *platform* (the agent listening on a
+Delivery: shopping jobs use `deliver=local`, so routine output and scheduler
+errors remain in their run history. Their prompts call `notify_user` only for
+new actionable deals after checking the alert trail for duplicates. This
+avoids sending both the tool notification and the same final response. The
+ntfy *platform* (the agent listening on a
 topic, `--deliver ntfy`) is opt-in via `HERMES_NTFY_INBOUND_TOPIC`: it must be
 a different topic from the alerts one, or the agent reads its own alerts as
 user messages.
@@ -618,6 +682,90 @@ go after the primary in `domains` so `storefront()` can pick them for a
 shopper in that market; a structured store whose regional market runs on
 Shopify lists it under `shopify_markets`. Then verify it:
 `python -m pricewatch.verify --store mystore`.
+
+## Laptop sleep, battery and power
+
+The stack runs on a MacBook that sleeps, gets unplugged and moves between
+networks. Docker Desktop freezes the containers with the host and thaws them
+on wake; what needs care is the minute after that thaw and the case where
+Docker itself is not running. Four pieces cover it:
+
+1. **A launchd user agent on the Mac** — `scripts/host/install-wake-agent.sh`
+   installs `com.hermes-shopping.wake`, which runs
+   `scripts/host/wake_recover.py` at every even minute. It uses
+   `StartCalendarInterval`, which coalesces missed events on wake;
+   `StartInterval` drops sleep-time events and is deliberately not used. In
+   steady state with everything healthy it does nothing and logs nothing.
+   When Docker is down it starts Docker Desktop (on AC power always; on
+   battery only with `--start-docker-on-battery`), brings the containers up
+   with `docker compose up -d --no-build --wait` (never a build — that is
+   `scripts/rebuild.sh`), waits for `/api/health` and for DNS to resolve
+   *inside* the engine container, and then — after a gap long enough to have
+   been a sleep (or a new kernel wake timestamp) — POSTs `/api/refresh` for one catch-up sweep and re-runs
+   once any hermes cron job that failed during the resume window. It holds a
+   `caffeinate -i` assertion while it works so a battery-powered Mac does not
+   doze off mid-sweep. Failed recovery stays pending for the next host run,
+   and unhealthy running containers are restarted before waiting for health. Log: `~/Library/Logs/hermes-shopping/wake.log`.
+
+   ```bash
+   ./scripts/host/install-wake-agent.sh              # install/refresh, runs once now
+   ./scripts/host/install-wake-agent.sh --status
+   ./scripts/host/install-wake-agent.sh --wake-at 08:55   # sudo pmset repeat: daily wake before the 09:00 brief
+   python3 scripts/host/wake_recover.py --catch-up -v     # what the agent does after a wake, by hand
+   python3 scripts/host/wake_recover.py --dry-run --catch-up
+   ```
+
+2. **The engine runs a missed sweep once, when it can.** The scheduler has no
+   misfire grace: a slot that passed while the container was frozen fires as
+   soon as the loop is back, and any number of missed slots coalesce into that
+   one run. Before sweeping it waits (about a minute) for name resolution,
+   because Docker's host-side resolver is the last thing to come back after a
+   wake. Each DNS probe has a five-second deadline. If DNS is still gone,
+   it schedules another attempt sixty seconds later without changing the
+   regular cadence. `/api/health` reports `sweep.last_skipped_at`,
+   `sweep.recovery_sweep_at`, and `sweep.sweep_running`. A container restart
+   also triggers one immediate sweep, since an in-memory scheduler forgets
+   missed slots across restarts. Overlapping full sweeps share one task even
+   if the first caller disconnects; alert evaluation is serialized to avoid
+   duplicate sends from overlapping targeted and scheduled refreshes.
+
+3. **Alerts are not consumed by a failed push.** Notification channels retry
+   transport failures (DNS, connect, timeout), HTTP 429, and temporary server
+   errors up to three times, with 2/5/15-second backoffs in addition to request
+   timeouts. `Retry-After` is honored; delays over thirty seconds are deferred
+   to a later sweep, with the deadline retained for the current process. Authentication and invalid-payload errors fail immediately. If every configured channel still
+   fails, the watch's cooldown is *not* started: the alert is recorded as
+   undelivered and sent again on the next sweep, instead of sitting out twelve
+   hours on a push nobody got.
+
+4. **The health watchdog checks the JSON, not the HTTP status.** `POST
+   /api/notify` answers 200 whether or not anything was delivered; the
+   watchdog now reads `delivered`, falls back to ntfy directly, and only
+   remembers a report it actually got out — an undelivered one is retried on
+   the next run. Engine and notification connectivity are checked independently.
+   Persistent incident keys prevent changing failure counts or unrelated
+   recoveries from re-pushing a problem already reported.
+
+What none of this can do: keep a closed MacBook awake. On AC with the lid shut
+the Mac still sleeps between Power Nap dark-wakes (roughly hourly), and on
+battery it sleeps a minute after the display goes off (`pmset -g custom`). Jobs
+run late, once, when the machine is next awake — `--wake-at` schedules a daily
+wake for the one that matters most.
+
+### Repeatable recovery tests
+
+```bash
+pricewatch/.venv/bin/python -m pytest pricewatch/tests -q
+python3 scripts/recovery-smoke.py --report /tmp/recovery-report.json
+```
+
+The Docker smoke test creates a temporary container with its own database, a
+local Shopify-style store, and a notification relay that fails once. It freezes
+the container across multiple scheduled ticks, verifies one catch-up and retry,
+then restarts it to verify persistence and duplicate suppression. It removes the
+test container and state afterwards. No real store or notification recipient is
+used. This reproduces process suspension; a physical lid-close test is still
+needed to verify this Mac's power, network, and launchd behavior together.
 
 ## Notes and caveats
 

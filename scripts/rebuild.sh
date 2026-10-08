@@ -143,17 +143,20 @@ else
     installed=$(docker compose exec -T pricewatch \
       python -c 'import pricewatch, os; print(os.path.dirname(pricewatch.__file__))' | tr -d '\r')
     verify_tree pricewatch pricewatch/src/pricewatch "$installed" .py
+    verify_tree pricewatch pricewatch/src/pricewatch/static "$installed/static"
 
     step "engine health"
     curl -fsS "localhost:${PW_PORT:-8077}/api/health" && echo
   fi
 
-  # The hermes image is the official one plus three COPYs (see hermes/Dockerfile);
+  # The hermes image layers project files onto the official image;
   # check each of them the same way, so a stale skill or init hook cannot hide.
   if rebuilding hermes; then
     step "verifying deployed agent files match working tree"
     verify_tree hermes hermes/skills /opt/hermes-skills
     verify_tree hermes hermes/dashboard-themes /opt/hermes-dashboard-themes
+    verify_tree hermes hermes/scripts /opt/hermes-shopping-scripts
+    verify_tree hermes hermes/cron-prompts /opt/hermes-cron-prompts
     verify_tree hermes hermes/cont-init.d/018-hermes-shopping /etc/cont-init.d/018-hermes-shopping
   fi
 fi
@@ -178,4 +181,5 @@ step "done"
 docker compose ps
 echo
 echo "dashboard: http://localhost:${HERMES_DASHBOARD_PORT:-9119}"
+echo "watchlist: http://localhost:${PW_PORT:-8077}/watchlist"
 echo "terminal agent: docker compose exec hermes hermes"

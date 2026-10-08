@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import logging
+import math
+import re
 from decimal import Decimal
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -93,6 +97,229 @@ def _out_of_stock_note(store: str) -> str:
 
 
 # ─────────────────────────── registration ────────────────────────────────
+_intake_tasks: dict[int, asyncio.Task] = {}
+_intake_lock: asyncio.Lock | None = None
+_intake_loop: asyncio.AbstractEventLoop | None = None
+_discovery_gate: asyncio.Semaphore | None = None
+_discovery_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _watch_input(value: str) -> tuple[str, str]:
+    """Normalise pasted links without losing variant or seller parameters."""
+    value = value.strip()
+    if not value or len(value) > 1000 or "\n" in value or "\r" in value:
+        raise ValueError("Enter one product link or name (up to 1,000 characters).")
+    if re.match(r"^(?:www\.)?[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:[/?:#]|$)", value):
+        value = "https://" + value
+    if "://" in value:
+        parts = urlsplit(value)
+        if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password:
+            raise ValueError("Use an http or https product link without login details.")
+        params = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+                  if not k.lower().startswith("utm_")
+                  and k.lower() not in {"fbclid", "gclid", "ref", "ref_", "tag"}]
+        value = urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path or "/",
+                           urlencode(sorted(params)), ""))
+        return value, "url:" + value
+    value = " ".join(value.split())
+    return value, "query:" + value.casefold()
+
+
+def _watch_status(tracker: Tracker, product: Product, offers: list[Offer]) -> tuple[str, str]:
+    if not tracker.active:
+        return "paused", "Paused"
+    live = [o for o in offers if o.active and
+            (not tracker.currency or (o.currency or "").upper() == tracker.currency.upper())]
+    if any(o.last_price is not None and not o.last_error for o in live):
+        return "watching", "Watching for your price or stock alert"
+    if any(o.last_price is not None for o in live):
+        return "retrying", "Last price saved; retrying the retailer automatically"
+    if product.discovery_checked_at or any(o.last_checked_at for o in live):
+        return "retrying", "Saved; looking for a readable matching listing automatically"
+    return "pending", "Saved; checking retailers in the background"
+
+
+def _start_intake(product_id: int, *, alternatives: bool = False) -> asyncio.Task:
+    """Keep a strong reference; sweeps resume unfinished work after restart."""
+    existing = _intake_tasks.get(product_id)
+    if existing is not None and not existing.done():
+        return existing
+    global _discovery_gate, _discovery_loop
+    loop = asyncio.get_running_loop()
+    if _discovery_loop is not loop:
+        _discovery_loop, _discovery_gate = loop, asyncio.Semaphore(2)
+
+    async def run() -> None:
+        async with _discovery_gate:
+            await _discover_product(product_id, alternatives=alternatives)
+
+    task = asyncio.create_task(run())
+    _intake_tasks[product_id] = task
+
+    def done(completed: asyncio.Task) -> None:
+        if _intake_tasks.get(product_id) is completed:
+            _intake_tasks.pop(product_id, None)
+        if not completed.cancelled() and completed.exception() is not None:
+            log.warning("product %s discovery will retry: %s", product_id, completed.exception())
+
+    task.add_done_callback(done)
+    return task
+
+
+async def add_watch(input: str, *, target_price: float | None = None,
+                    drop_pct: float | None = None, alert_on_restock: bool = False,
+                    stores: list[str] | None = None, channels: str = "",
+                    cooldown_hours: int = 12) -> dict:
+    """Save first, then research. With no rule supplied, watch for a 5% drop."""
+    try:
+        value, key = _watch_input(input)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    if target_price is not None and (not math.isfinite(target_price) or target_price <= 0):
+        return {"ok": False, "error": "Target price must be greater than zero."}
+    if drop_pct is not None and (not math.isfinite(drop_pct) or not 0 < drop_pct < 100):
+        return {"ok": False, "error": "Price drop must be greater than 0 and less than 100%."}
+    if cooldown_hours < 1:
+        return {"ok": False, "error": "Alert cooldown must be at least one hour."}
+    if stores and any(key not in ADAPTERS for key in stores):
+        return {"ok": False, "error": "An unknown store was selected."}
+    if target_price is None and drop_pct is None and not alert_on_restock:
+        drop_pct = 5.0
+
+    def write(session: Session) -> dict:
+        product = session.scalar(select(Product).where(Product.watch_key == key))
+        if product is None and key.startswith("url:"):
+            offer = session.scalar(select(Offer).where(Offer.url == value))
+            product = offer.product if offer else None
+        if product is None and key.startswith("query:"):
+            # A user may paste the exact title of a product already added by
+            # link. Match words exactly; fuzzy deduplication can merge variants.
+            product = next((p for p in session.scalars(select(Product))
+                            if " ".join(p.title.split()).casefold() == value.casefold()), None)
+        if product is None:
+            product = Product(title=value[:500], match_key=matching.match_key(value),
+                              watch_input=value, watch_key=key,
+                              watch_stores=json.dumps(stores) if stores else None)
+            session.add(product)
+            session.flush()
+        tracker = session.scalar(select(Tracker).where(Tracker.product_id == product.id)
+                                 .order_by(Tracker.active.desc(), Tracker.id))
+        existing = tracker is not None
+        if tracker is None:
+            tracker = Tracker(product_id=product.id, label=value[:200],
+                              target_price=Decimal(str(target_price)) if target_price is not None else None,
+                              drop_pct=drop_pct, alert_on_restock=alert_on_restock,
+                              channels=channels, cooldown_hours=cooldown_hours,
+                              currency=(preferences.preferred_currency() or None)
+                              if key.startswith("query:") else None)
+            session.add(tracker)
+            session.flush()
+        if key.startswith("url:") and not product.offers:
+            session.add(Offer(product_id=product.id, store=store_key_for_url(value) or host_of(value),
+                              url=value, currency=tracker.currency or ""))
+            session.flush()
+            session.expire(product, ["offers"])
+        _initial_baselines(session, product.id)
+        status, status_note = _watch_status(tracker, product, product.offers)
+        return {"ok": True, "product_id": product.id, "tracker_id": tracker.id,
+                "title": product.title, "status": status, "existing": existing,
+                "target_price": float(tracker.target_price) if tracker.target_price is not None else None,
+                "drop_pct": tracker.drop_pct, "alert_on_restock": tracker.alert_on_restock,
+                "note": ("Already on your watchlist; existing alert settings kept." if existing else
+                         status_note + (" Alerts on a 5% price drop." if drop_pct == 5.0 else "."))}
+
+    global _intake_lock, _intake_loop
+    loop = asyncio.get_running_loop()
+    if _intake_loop is not loop:
+        _intake_loop, _intake_lock = loop, asyncio.Lock()
+    async with _intake_lock:
+        result = await in_db(write)
+    if result["status"] in {"pending", "retrying"} and not result["existing"]:
+        _start_intake(result["product_id"])
+    return result
+
+
+def _initial_baselines(session: Session, product_id: int) -> None:
+    """A queued watch gets its baseline only after a real price is observed."""
+    offers = session.scalars(select(Offer).where(Offer.product_id == product_id,
+                                                Offer.active.is_(True))).all()
+    priced = [o for o in offers if o.last_price is not None and not o.last_error]
+    for tracker in session.scalars(select(Tracker).where(Tracker.product_id == product_id)).all():
+        if tracker.baseline_price is not None:
+            continue
+        relevant = [o for o in priced if not tracker.currency or o.currency == tracker.currency]
+        if relevant:
+            best = min(relevant, key=lambda o: usd_sort_key(o.last_price, o.currency))
+            tracker.baseline_price, tracker.currency = best.last_price, best.currency
+
+
+async def _discover_product(product_id: int, *, alternatives: bool = False) -> None:
+    def read(session: Session) -> tuple[str, list[str] | None] | None:
+        product = session.get(Product, product_id)
+        if not product or not any(t.active for t in product.trackers):
+            return None
+        value = product.title if alternatives else product.watch_input
+        if not value:
+            return None
+        return value, json.loads(product.watch_stores) if product.watch_stores else None
+
+    loaded = await in_db(read)
+    if loaded is None:
+        return
+    value, stores = loaded
+    is_url = value.startswith(("http://", "https://"))
+    results: list[StoreResult] = []
+    error = None
+    try:
+        if is_url:
+            result, _ = await _fetch_for_tracking(value)
+            results = [result]
+            if not result.ok:
+                error = result.error or "Retailer price is not readable yet"
+        else:
+            ranked, _, _ = await _search_ranked(value, stores=stores, limit_per_store=3, threshold=74.0)
+            trackable = [r for r in ranked if r.ok and _is_trackable(r.store)]
+            as_new = [r for r in trackable if not r.extra.get("condition") and not r.extra.get("marketplace")]
+            results = (as_new or trackable)[:8]
+            if not results:
+                error = "No readable matching listing yet"
+    except Exception as exc:
+        log.info("product %s lookup deferred: %s", product_id, exc)
+        error = "Retailer lookup is temporarily unavailable"
+
+    def write(session: Session) -> None:
+        product = session.get(Product, product_id)
+        if product is None or not any(t.active for t in product.trackers):
+            return
+        product.discovery_checked_at, product.discovery_error = utcnow(), error
+        accepted = []
+        for result in results:
+            # An offer URL belongs to one product; never silently attach its
+            # price history to a second, unrelated product.
+            collision = session.scalar(select(Offer).where(Offer.url == result.url))
+            if collision is not None and collision.product_id != product_id:
+                continue
+            if is_url and result.url != value:
+                placeholder = session.scalar(select(Offer).where(Offer.product_id == product_id,
+                                                                 Offer.url == value))
+                if placeholder and placeholder.last_price is None and collision is None:
+                    placeholder.url = result.url
+            accepted.append(_upsert_offer(session, product_id, result))
+        good = [o for o in accepted if o.last_price is not None and not o.last_error]
+        if good:
+            if is_url and product.title == value and good[0].title:
+                product.title = good[0].title
+                product.match_key = matching.match_key(product.title)
+                for tracker in product.trackers:
+                    if tracker.label == value[:200]:
+                        tracker.label = product.title[:200]
+            _initial_baselines(session, product_id)
+        elif results and not accepted:
+            product.discovery_error = "Matching listings are already on another watch"
+
+    await in_db(write)
+
+
 async def track_url(url: str, *, target_price: float | None = None, drop_pct: float | None = None,
                     alert_on_restock: bool = False, label: str = "", channels: str = "",
                     cooldown_hours: int = 12) -> dict:
@@ -293,6 +520,8 @@ def _upsert_offer(session: Session, product_id: int, result: StoreResult) -> Off
         session.add(offer)
 
     previous = offer.last_price
+    if result.ok and result.store and (previous is None or offer.store == host_of(offer.url)):
+        offer.store = result.store
     offer.title = result.title or offer.title
     offer.sku = result.sku or offer.sku
     offer.currency = result.currency or offer.currency
@@ -324,30 +553,98 @@ def _upsert_offer(session: Session, product_id: int, result: StoreResult) -> Off
                                    currency=offer.currency, in_stock=offer.in_stock))
     else:
         offer.last_error = result.error
-        offer.consecutive_errors += 1
+        offer.consecutive_errors = (offer.consecutive_errors or 0) + 1
 
     session.flush()
     return offer
 
 
 # ───────────────────────────── refreshing ────────────────────────────────
+_full_sweep: asyncio.Task | None = None
+_last_full_sweep: dict | None = None
+
+
+def last_full_sweep() -> dict | None:
+    """When the last full sweep finished and what it found, however it was
+    started (the schedule or POST /api/refresh). None until one has run."""
+    return _last_full_sweep
+
+
+async def stop_full_sweep() -> None:
+    """Finish cancellation before shutdown closes the shared HTTP clients."""
+    task = _full_sweep
+    if task is not None and not task.done():
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    intake = list(_intake_tasks.values())
+    for task in intake:
+        task.cancel()
+    if intake:
+        await asyncio.gather(*intake, return_exceptions=True)
+    _intake_tasks.clear()
+
+
 async def refresh_offers(offer_ids: list[int] | None = None) -> dict:
-    """Re-read every active offer, then evaluate alert rules."""
+    """Re-read every active offer (or just `offer_ids`), then evaluate alert rules.
+
+    A full sweep means "make sure every listing has been re-read now", so a
+    second caller while one is in flight joins it instead of starting another:
+    after the laptop wakes, the scheduler's catch-up and the host wake hook's
+    POST /api/refresh arrive within seconds of each other, and 40 retailers
+    do not need to hear from us twice.
+    """
+    global _full_sweep
+    if offer_ids:
+        return await _refresh_offers(offer_ids)
+    if _full_sweep is not None and not _full_sweep.done():
+        return await asyncio.shield(_full_sweep)
+    task = asyncio.create_task(_refresh_offers(None))
+    _full_sweep = task
+
+    def finished(completed: asyncio.Task) -> None:
+        global _full_sweep
+        if _full_sweep is completed:
+            _full_sweep = None
+        # Retrieve failures even if every HTTP caller disconnected during wake.
+        if not completed.cancelled() and completed.exception() is not None:
+            log.error("background sweep failed: %s", completed.exception())
+
+    task.add_done_callback(finished)
+    return await asyncio.shield(task)
+
+
+async def _refresh_offers(offer_ids: list[int] | None) -> dict:
     def read(session: Session) -> list[tuple[int, int, str]]:
         query = select(Offer.id, Offer.product_id, Offer.url).where(Offer.active.is_(True))
         if offer_ids:
             query = query.where(Offer.id.in_(offer_ids))
+        else:
+            busy = [pid for pid, task in _intake_tasks.items() if not task.done()]
+            if busy:
+                query = query.where(Offer.product_id.not_in(busy))
         return [tuple(row) for row in session.execute(query).all()]
 
+    def done(summary: dict) -> dict:
+        global _last_full_sweep
+        if offer_ids is None:
+            _last_full_sweep = {"at": utcnow().isoformat(), "checked": summary["checked"],
+                                "updated": summary["updated"], "failed": summary["failed"],
+                                "alerts": len(summary["alerts"])}
+        return summary
+
     targets = await in_db(read)
-    if not targets:
-        return {"checked": 0, "updated": 0, "failed": 0, "alerts": []}
 
     semaphore = asyncio.Semaphore(_SWEEP_CONCURRENCY)
 
     async def one(offer_id: int, product_id: int, url: str) -> tuple[int, int, StoreResult]:
         async with semaphore:
-            return offer_id, product_id, await fetch_offer(url)
+            try:
+                result = await fetch_offer(url)
+            except Exception as exc:
+                log.info("offer %s lookup deferred: %s", offer_id, exc)
+                result = StoreResult(store=store_key_for_url(url) or host_of(url), url=url,
+                                     currency="", error="Retailer lookup is temporarily unavailable")
+            return offer_id, product_id, result
 
     outcomes = await asyncio.gather(*(one(*t) for t in targets), return_exceptions=True)
 
@@ -367,16 +664,48 @@ async def refresh_offers(offer_ids: list[int] | None = None) -> dict:
             _upsert_offer(session, product_id, result)
             if result.ok:
                 updated += 1
+                _initial_baselines(session, product_id)
             else:
                 failed += 1
 
     await in_db(write)
+    discovered = 0
+    if offer_ids is None:
+        # An empty search is durable work too. Retry every sweep; revisit
+        # resolved name searches daily to find additional retailers.
+        def pending_discovery(session: Session) -> list[tuple[int, bool]]:
+            pending = []
+            for product in session.scalars(select(Product)):
+                if not any(t.active for t in product.trackers):
+                    continue
+                age = (utcnow() - _utc(product.discovery_checked_at)
+                       if product.discovery_checked_at else dt.timedelta.max)
+                healthy = any(o.active and o.last_price is not None and not o.last_error
+                              for o in product.offers)
+                name_watch = bool(product.watch_input and not product.watch_input.startswith(("http://", "https://")))
+                if name_watch and (age >= dt.timedelta(days=1) or not healthy):
+                    pending.append((product.id, False))
+                elif (not healthy and age >= dt.timedelta(days=1)
+                      and not product.title.startswith(("http://", "https://"))
+                      and any((o.consecutive_errors or 0) >= 3 for o in product.offers)):
+                    # Existing watches need useful recovery too: keep retrying
+                    # their URLs and look for another retailer once a day.
+                    pending.append((product.id, True))
+            return pending
+
+        pending = await in_db(pending_discovery)
+        if pending:
+            await asyncio.gather(*(_start_intake(pid, alternatives=alternatives)
+                                   for pid, alternatives in pending), return_exceptions=True)
+            discovered = len(pending)
     alerts = await evaluate_trackers()
-    return {"checked": len(targets), "updated": updated, "failed": failed, "alerts": alerts}
+    return done({"checked": len(targets), "updated": updated, "failed": failed,
+                 "discovered": discovered, "alerts": alerts})
 
 
 # ────────────────────────── alerting rules ───────────────────────────────
-def _best_offer(session: Session, product_id: int, currency: str | None = None) -> Offer | None:
+def _best_offer(session: Session, product_id: int, currency: str | None = None,
+                *, fresh_only: bool = False) -> Offer | None:
     """Cheapest live listing — within one currency when asked, because a
     watch's thresholds only mean something against prices in their own money."""
     offers = session.scalars(
@@ -384,6 +713,8 @@ def _best_offer(session: Session, product_id: int, currency: str | None = None) 
     ).all()
     if currency:
         offers = [o for o in offers if (o.currency or "").upper() == currency.upper()]
+    if fresh_only:
+        offers = [o for o in offers if not o.last_error and o.in_stock is not False]
     priced = [o for o in offers if o.last_price is not None and o.in_stock is not False]
     if not priced:
         priced = [o for o in offers if o.last_price is not None]
@@ -452,6 +783,7 @@ def _restocked_offer(session: Session, tracker: Tracker, currency: str | None) -
     fresh = [
         o for o in offers
         if o.in_stock is True and o.last_restocked_at is not None and o.last_price is not None
+        and not o.last_error
         and (not currency or (o.currency or "").upper() == currency.upper())
         and (since is None or _utc(o.last_restocked_at) > _utc(since))
     ]
@@ -473,7 +805,21 @@ def _pending(kind: str, tracker: Tracker, product: Product | None, offer: Offer,
     }
 
 
+_evaluation_lock: asyncio.Lock | None = None
+_evaluation_loop: asyncio.AbstractEventLoop | None = None
+
+
 async def evaluate_trackers() -> list[dict]:
+    """Serialize decisions and delivery so overlapping refreshes cannot double-send."""
+    global _evaluation_lock, _evaluation_loop
+    loop = asyncio.get_running_loop()
+    if _evaluation_loop is not loop:
+        _evaluation_loop, _evaluation_lock = loop, asyncio.Lock()
+    async with _evaluation_lock:
+        return await _evaluate_trackers()
+
+
+async def _evaluate_trackers() -> list[dict]:
     """Find trackers whose conditions are met and send their notifications.
 
     A watch can carry a price rule and a restock rule at once. Each fires on
@@ -486,7 +832,7 @@ async def evaluate_trackers() -> list[dict]:
             # its thresholds. A cheaper foreign listing is not a drop.
             currency = _tracker_currency(session, tracker)
             product = session.get(Product, tracker.product_id)
-            offer = _best_offer(session, tracker.product_id, currency)
+            offer = _best_offer(session, tracker.product_id, currency, fresh_only=True)
             if offer is not None and offer.last_price is not None:
                 hits = _reasons(tracker, offer.last_price, currency)
                 if hits and _should_notify(tracker, offer.last_price):
@@ -528,15 +874,22 @@ async def evaluate_trackers() -> list[dict]:
         )
         outcome = await dispatch(alert, only=only)
         delivered = any(v == "sent" for v in outcome.values())
+        # The cooldown starts only once a channel has taken the message. When
+        # every configured channel failed (DNS not back after a laptop resume,
+        # ntfy down) the watch stays un-notified, so the next sweep sends the
+        # alert again instead of sitting out twelve hours on a push nobody got.
+        # With no channel configured there is nothing to retry into, so the
+        # stamp still goes on — otherwise every sweep would re-record the hit.
+        stamp = delivered or not outcome
 
         def write(session: Session, item=item, reasons=reasons, outcome=outcome,
-                  delivered=delivered) -> None:
+                  delivered=delivered, stamp=stamp) -> None:
             tracker = session.get(Tracker, item["tracker_id"])
             if tracker is None:
                 return
-            if item["kind"] == "restock":
+            if stamp and item["kind"] == "restock":
                 tracker.last_restock_notified_at = utcnow()
-            else:
+            elif stamp:
                 tracker.last_notified_at = utcnow()
                 tracker.last_notified_price = item["price"]
             session.add(AlertEvent(
@@ -552,8 +905,9 @@ async def evaluate_trackers() -> list[dict]:
                      "store": item["store"], "reasons": reasons, "channels": outcome,
                      "deal_note": item.get("deal_note")})
         if not delivered:
-            log.warning("tracker %s matched but no channel delivered: %s",
-                        item["tracker_id"], outcome)
+            log.warning("tracker %s matched but no channel delivered: %s%s",
+                        item["tracker_id"], outcome,
+                        "; will retry on the next sweep" if outcome else "")
     return sent
 
 
@@ -579,17 +933,24 @@ async def list_tracked() -> list[dict]:
             offers = session.scalars(
                 select(Offer).where(Offer.product_id == tracker.product_id)).all()
             currency = _tracker_currency(session, tracker)
-            best = _best_offer(session, tracker.product_id, currency)
+            best = (_best_offer(session, tracker.product_id, currency, fresh_only=True)
+                    or _best_offer(session, tracker.product_id, currency))
             foreign = [o for o in offers
                        if currency and (o.currency or "").upper() != currency]
             # Same one-currency rule as the alert: a foreign listing that is
             # sold out is not something this watch will ever report back.
             out_of_stock = [o for o in offers
                             if o.in_stock is False and o not in foreign]
+            status, status_note = _watch_status(tracker, product, offers)
             row = {
                 "tracker_id": tracker.id, "product_id": tracker.product_id,
                 "label": tracker.label, "title": product.title if product else None,
                 "active": tracker.active,
+                "status": status, "status_note": status_note,
+                "watch_input": product.watch_input,
+                "discovery_checked_at": (product.discovery_checked_at.isoformat()
+                                         if product.discovery_checked_at else None),
+                "discovery_error": product.discovery_error,
                 "currency": currency,
                 "target_price": float(tracker.target_price) if tracker.target_price else None,
                 "drop_pct": tracker.drop_pct,
@@ -598,6 +959,8 @@ async def list_tracked() -> list[dict]:
                 "current_best": (
                     {"price": float(best.last_price), "currency": best.currency,
                      "store": best.store, "url": best.url,
+                     "stale": bool(best.last_error),
+                     "last_checked": best.last_checked_at.isoformat() if best.last_checked_at else None,
                      **({"deal_note": best.deal_note} if best.deal_note else {})}
                     if best and best.last_price is not None else None),
                 "out_of_stock_listings": len(out_of_stock),
@@ -773,9 +1136,9 @@ async def set_tracker(tracker_id: int, **changes) -> dict:
             return {"ok": False, "error": f"no tracker {tracker_id}"}
         for field in ("target_price", "drop_pct", "alert_on_restock", "channels",
                       "cooldown_hours", "active", "label"):
-            if field in changes and changes[field] is not None:
+            if field in changes and (changes[field] is not None or field in {"target_price", "drop_pct"}):
                 value = changes[field]
-                if field == "target_price":
+                if field == "target_price" and value is not None:
                     value = Decimal(str(value))
                 if field == "alert_on_restock" and value and not tracker.alert_on_restock:
                     # Switching the rule on starts the clock now. A listing that
@@ -802,6 +1165,9 @@ async def backfill_tracker_currency() -> int:
     def write(session: Session) -> int:
         fixed = 0
         for tracker in session.scalars(select(Tracker).where(Tracker.currency.is_(None))).all():
+            product = session.get(Product, tracker.product_id)
+            if product and product.watch_input and tracker.baseline_price is None:
+                continue  # queued watches adopt a currency on the first real read
             offers = session.scalars(select(Offer).where(
                 Offer.product_id == tracker.product_id).order_by(Offer.id)).all()
             currency = None

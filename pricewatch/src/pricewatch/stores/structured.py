@@ -48,13 +48,20 @@ class StructuredAdapter(StoreAdapter):
         # global default, unless the catalog says the domain lies.
         host = None if self.currency else host_of(page.url)
         fallback = self.currency or currency_for_host(host, settings.pw_currency)
-        found = extract(page.text, default_currency=fallback, host=host)
+        if page.status in (404, 410):
+            return StoreResult(store=store, url=page.url, method=f"{page.method}:not-found",
+                               error=f"product page no longer available (HTTP {page.status})")
+        if page.looks_blocked:
+            return StoreResult(store=store, url=page.url, method=f"{page.method}:blocked",
+                               error="store returned an access challenge")
+        found = extract(page.text, default_currency=fallback, host=host, url=page.url)
         if not found.ok:
             # One escalation: the price may only exist after JS runs.
             if page.method == "http" and settings.pw_browser_enabled:
                 try:
                     page = await fetcher.render(url, wait_for=self.wait_for)
-                    found = extract(page.text, default_currency=fallback, host=host)
+                    if not page.looks_blocked and 200 <= page.status < 400:
+                        found = extract(page.text, default_currency=fallback, host=host, url=page.url)
                 except Exception:
                     pass
         if not found.ok:

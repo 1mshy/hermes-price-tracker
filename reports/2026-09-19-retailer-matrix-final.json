@@ -1,0 +1,670 @@
+{
+  "observed_at": "2026-09-19T02:56:16.595074+00:00",
+  "paid_apis": false,
+  "discovery": [
+    {
+      "store": "amazon",
+      "url": "https://www.amazon.com/dp/B0FWJBDX6Z",
+      "method": "catalog-seed"
+    },
+    {
+      "store": "walmart",
+      "url": "https://www.walmart.com/ip/17835006350",
+      "method": "catalog-seed"
+    },
+    {
+      "store": "bestbuyca",
+      "url": "https://www.bestbuy.ca/en-ca/product/bambu-lab-p2s-ams-combo/19854444",
+      "method": "catalog-seed"
+    },
+    {
+      "store": "canadacomputers",
+      "url": "https://www.canadacomputers.com/en/fdm-3d-printer/280601/bambu-lab-p1s-combo-3d-printer-bilingual-packaging-pf001-usa001-ca.html",
+      "method": "catalog-seed"
+    },
+    {
+      "store": "newegg",
+      "url": "https://www.newegg.com/Creality-K2-Pro-Combo/p/N82E16828285069",
+      "method": "catalog-seed"
+    },
+    {
+      "store": "sunlu",
+      "url": "https://store.sunlu.com/products/pre-order-filadc-i10-filament-dehumidifying-cabinet",
+      "method": "products.json"
+    },
+    {
+      "store": "kb3d",
+      "url": "https://kb-3d.com/store/stepper-motors-servos/11264-ldo-stepper-motor-nema-14-36sth20-1004ahig7t-1642876241077.html",
+      "method": "homepage-scrape"
+    },
+    {
+      "store": "memoryexpress",
+      "url": "https://www.memoryexpress.com/Products/MX00132891",
+      "method": "homepage-scrape"
+    }
+  ],
+  "browser_recovery": {
+    "session_cookie_reused": true,
+    "javascript_price_rendered": true,
+    "browser_relaunched_and_cookie_restored": true,
+    "new_fetcher_restores_disk_session": true,
+    "no_leaked_pages": true
+  },
+  "results": [
+    {
+      "store": "amazon",
+      "url": "https://www.amazon.com/dp/B0FWJBDX6Z",
+      "phase": "normal",
+      "iteration": 1,
+      "title": "SainSmart SUNLU AMS Heater Upgrade for Bambu Lab AMS Gen 1, Simultaneous Filament Drying & Printing, Fast 70\u00b0C Heating, Smart Humidity Control, 4-Roll Capacity, Easy 2-Min Install (AMS Not Included)",
+      "price": 140.07,
+      "currency": "CAD",
+      "in_stock": true,
+      "sku": "B0FWJBDX6Z",
+      "method": "http:amazon-dom",
+      "error": null,
+      "extra": {
+        "list_price": "168.08",
+        "note": "amazon.com showed this price in CAD because the visitor is abroad; the listing bills in USD, and the converted figure changes from one read to the next \u2014 track it on the regional storefront instead"
+      },
+      "seconds": 1.86
+    },
+    {
+      "store": "walmart",
+      "url": "https://www.walmart.com/ip/AirPods-Pro-3/17835006350",
+      "phase": "normal",
+      "iteration": 1,
+      "title": "Apple AirPods Pro 3",
+      "price": 199.0,
+      "currency": "USD",
+      "in_stock": false,
+      "sku": "17835006350",
+      "method": "http:next-data",
+      "error": null,
+      "extra": {
+        "seller": "Walmart.com",
+        "offer_id": "DB27655FBBD03715AAB377A0626F81CA"
+      },
+      "approx_in_preferred": {
+        "currency": "CAD",
+        "amount": 272.6,
+        "rate_source": "static",
+        "rate_as_of": null,
+        "basis": "indicative static fallback rate (live rates unavailable), not a quote \u2014 report the price above in USD and present this only as an approximation"
+      },
+      "seconds": 1.03
+    },
+    {
+      "store": "bestbuyca",
+      "url": "https://www.bestbuy.ca/en-ca/product/bambu-lab-p2s-ams-combo-enclosed-fdm-3d-printer-multi-colour-printing-camera-auto-bed-leveling-600mm-s-300c-256-x-256-x-256mm-build-volume/19854444",
+      "phase": "normal",
+      "iteration": 1,
+      "title": "Bambu Lab P2S AMS Combo Enclosed FDM 3D Printer - Multi-Colour Printing, Camera, Auto Bed Leveling, 600mm/s, 300\u00b0C \u2013 256 x 256 x 256mm Build Volume",
+      "price": 999.99,
+      "currency": "CAD",
+      "in_stock": true,
+      "sku": "19854444",
+      "method": "bestbuyca-api",
+      "error": null,
+      "extra": {
+        "regular_price": 999.99,
+        "on_sale": false,
+        "marketplace": false
+      },
+      "seconds": 0.45
+    },
+    {
+      "store": "canadacomputers",
+      "url": "https://www.canadacomputers.com/en/fdm-3d-printer/280601/bambu-lab-p1s-combo-3d-printer-bilingual-packaging-pf001-usa001-ca.html",
+      "phase": "normal",
+      "iteration": 1,
+      "title": "Bambu Lab P1S Combo 3D Printer, Bilingual packaging",
+      "price": 719.99,
+      "currency": "CAD",
+      "in_stock": true,
+      "sku": "QPBAM00014",
+      "method": "http:json-ld",
+      "error": null,
+      "seconds": 1.0
+    },
+    {
+      "store": "newegg",
+      "url": "https://www.newegg.com/Creality-K2-Pro-Combo/p/N82E16828285069",
+      "phase": "normal",
+      "iteration": 1,
+      "title": "Creality K2 Pro Combo 3D Printer + CFS, 600mm/s, 300x300x300mm Build Volume, Active Chamber Heating, Dual AI Cameras, Auto Leveling, ABS/ASA/PLA-CF Ready",
+      "price": 799.99,
+      "currency": "USD",
+      "in_stock": null,
+      "sku": null,
+      "method": "http:selector",
+      "error": null,
+      "approx_in_preferred": {
+        "currency": "CAD",
+        "amount": 1095.88,
+        "rate_source": "static",
+        "rate_as_of": null,
+        "basis": "indicative static fallback rate (live rates unavailable), not a quote \u2014 report the price above in USD and present this only as an approximation"
+      },
+      "seconds": 0.19
+    },
+    {
+      "store": "sunlu",
+      "url": "https://store.sunlu.com/products/filament-dehumidifying-cabinet-filadc-i10",
+      "phase": "normal",
+      "iteration": 1,
+      "title": "[Pre-order] FilaDC i10 Filament Dehumidifying Cabinet",
+      "price": 249.99,
+      "currency": "CAD",
+      "in_stock": true,
+      "sku": "S-IN-DC-I10_INS-BK-US-NA-CD-CA",
+      "method": "shopify-json",
+      "error": null,
+      "extra": {
+        "variant": "Ship to USA/EU/CA/AU / Ship to Canada / FilaDC i10 / 1 unit"
+      },
+      "seconds": 10.43
+    },
+    {
+      "store": "kb3d",
+      "url": "https://kb-3d.com/store/stepper-motors-servos/11264-ldo-stepper-motor-nema-14-36sth20-1004ahig7t-1642876241077.html",
+      "phase": "normal",
+      "iteration": 1,
+      "title": "LDO Stepper Motor - Nema 14 - 36STH20-1004AHIG(7T) LDO Stepper Motor - Nema 14 - 36STH20-1004AHIG(7T)",
+      "price": 20.99,
+      "currency": "USD",
+      "in_stock": true,
+      "sku": null,
+      "method": "http:microdata",
+      "error": null,
+      "approx_in_preferred": {
+        "currency": "CAD",
+        "amount": 28.75,
+        "rate_source": "static",
+        "rate_as_of": null,
+        "basis": "indicative static fallback rate (live rates unavailable), not a quote \u2014 report the price above in USD and present this only as an approximation"
+      },
+      "seconds": 0.38
+    },
+    {
+      "store": "memoryexpress",
+      "url": "https://www.memoryexpress.com/Products/MX00132891",
+      "phase": "normal",
+      "iteration": 1,
+      "title": "Gaming V16 V3607VU-DS73-CA w/ GeForce RTX 4050, Core\u2122 7 240H, 16GB, 512GB SSD, 16in WUXGA 144Hz, Wi-Fi 6, Win 11 Home",
+      "price": 1399.99,
+      "currency": "CAD",
+      "in_stock": null,
+      "sku": null,
+      "method": "http:selector",
+      "error": null,
+      "seconds": 0.18
+    },
+    {
+      "store": "amazon",
+      "url": "https://www.amazon.ca/dp/B0CXG4WG1L",
+      "phase": "normal",
+      "iteration": 1,
+      "title": "Logitech MX Master 3S, Black (Renewed)",
+      "price": 114.99,
+      "currency": "CAD",
+      "in_stock": true,
+      "sku": "B0CXG4WG1L",
+      "method": "http:amazon-dom",
+      "error": null,
+      "seconds": 1.64
+    },
+    {
+      "store": "amazon",
+      "url": "https://www.amazon.ca/dp/B0CMVDQKWK",
+      "phase": "normal",
+      "iteration": 1,
+      "title": "Logitech MX Anywhere 3S Compact Wireless Mouse, Fast Scrolling, 8K DPI Any-Surface Tracking, Quiet Clicks, Programmable Buttons, USB C, Bluetooth, Windows PC, Linux, Chrome, Mac - Pale Grey (Renewed)",
+      "price": 86.99,
+      "currency": "CAD",
+      "in_stock": null,
+      "sku": "B0CMVDQKWK",
+      "method": "http:amazon-dom",
+      "error": null,
+      "extra": {
+        "list_price": "123.99"
+      },
+      "seconds": 2.34
+    },
+    {
+      "store": "walmart",
+      "url": "https://www.walmart.com/ip/500903542",
+      "phase": "normal",
+      "iteration": 1,
+      "title": null,
+      "price": null,
+      "currency": "USD",
+      "in_stock": null,
+      "sku": null,
+      "method": "browser:failed",
+      "error": "no price for the requested product in page",
+      "seconds": 15.02
+    },
+    {
+      "store": "walmart",
+      "url": "https://www.walmart.com/ip/Wireless-Mouse-Logitech-M185-Wireless-Mouse-Black/908154695",
+      "phase": "normal",
+      "iteration": 1,
+      "title": "Wireless Mouse - Logitech M185 Wireless Mouse,Black",
+      "price": 14.0,
+      "currency": "USD",
+      "in_stock": false,
+      "sku": "908154695",
+      "method": "http:next-data",
+      "error": null,
+      "extra": {
+        "seller": "The Deal Source",
+        "offer_id": "272F3D7FF6F73574926D6D0890CAFC13"
+      },
+      "approx_in_preferred": {
+        "currency": "CAD",
+        "amount": 19.18,
+        "rate_source": "static",
+        "rate_as_of": null,
+        "basis": "indicative static fallback rate (live rates unavailable), not a quote \u2014 report the price above in USD and present this only as an approximation"
+      },
+      "seconds": 1.3
+    },
+    {
+      "store": "walmart",
+      "url": "https://www.walmart.ca/en/ip/Logitech-M185-Wireless-Mouse/6000195939151",
+      "phase": "normal",
+      "iteration": 1,
+      "title": "Logitech M185 Wireless Mouse",
+      "price": 19.88,
+      "currency": "CAD",
+      "in_stock": true,
+      "sku": "6000195939151",
+      "method": "http:next-data",
+      "error": null,
+      "extra": {
+        "seller": "MAA-Canada",
+        "offer_id": "27B326AB3B6A328F86C6944DD64A1F23"
+      },
+      "seconds": 1.07
+    },
+    {
+      "store": "amazon",
+      "url": "https://www.amazon.com/dp/B0FWJBDX6Z",
+      "phase": "normal",
+      "iteration": 2,
+      "title": "SainSmart SUNLU AMS Heater Upgrade for Bambu Lab AMS Gen 1, Simultaneous Filament Drying & Printing, Fast 70\u00b0C Heating, Smart Humidity Control, 4-Roll Capacity, Easy 2-Min Install (AMS Not Included)",
+      "price": 140.07,
+      "currency": "CAD",
+      "in_stock": true,
+      "sku": "B0FWJBDX6Z",
+      "method": "http:amazon-dom",
+      "error": null,
+      "extra": {
+        "list_price": "168.08",
+        "note": "amazon.com showed this price in CAD because the visitor is abroad; the listing bills in USD, and the converted figure changes from one read to the next \u2014 track it on the regional storefront instead"
+      },
+      "seconds": 1.6
+    },
+    {
+      "store": "walmart",
+      "url": "https://www.walmart.com/ip/AirPods-Pro-3/17835006350",
+      "phase": "normal",
+      "iteration": 2,
+      "title": "Apple AirPods Pro 3",
+      "price": 199.0,
+      "currency": "USD",
+      "in_stock": false,
+      "sku": "17835006350",
+      "method": "http:next-data",
+      "error": null,
+      "extra": {
+        "seller": "Walmart.com",
+        "offer_id": "DB27655FBBD03715AAB377A0626F81CA"
+      },
+      "approx_in_preferred": {
+        "currency": "CAD",
+        "amount": 272.6,
+        "rate_source": "static",
+        "rate_as_of": null,
+        "basis": "indicative static fallback rate (live rates unavailable), not a quote \u2014 report the price above in USD and present this only as an approximation"
+      },
+      "seconds": 1.25
+    },
+    {
+      "store": "bestbuyca",
+      "url": "https://www.bestbuy.ca/en-ca/product/bambu-lab-p2s-ams-combo-enclosed-fdm-3d-printer-multi-colour-printing-camera-auto-bed-leveling-600mm-s-300c-256-x-256-x-256mm-build-volume/19854444",
+      "phase": "normal",
+      "iteration": 2,
+      "title": "Bambu Lab P2S AMS Combo Enclosed FDM 3D Printer - Multi-Colour Printing, Camera, Auto Bed Leveling, 600mm/s, 300\u00b0C \u2013 256 x 256 x 256mm Build Volume",
+      "price": 999.99,
+      "currency": "CAD",
+      "in_stock": true,
+      "sku": "19854444",
+      "method": "bestbuyca-api",
+      "error": null,
+      "extra": {
+        "regular_price": 999.99,
+        "on_sale": false,
+        "marketplace": false
+      },
+      "seconds": 0.16
+    },
+    {
+      "store": "canadacomputers",
+      "url": "https://www.canadacomputers.com/en/fdm-3d-printer/280601/bambu-lab-p1s-combo-3d-printer-bilingual-packaging-pf001-usa001-ca.html",
+      "phase": "normal",
+      "iteration": 2,
+      "title": "Bambu Lab P1S Combo 3D Printer, Bilingual packaging",
+      "price": 719.99,
+      "currency": "CAD",
+      "in_stock": true,
+      "sku": "QPBAM00014",
+      "method": "http:json-ld",
+      "error": null,
+      "seconds": 1.5
+    },
+    {
+      "store": "newegg",
+      "url": "https://www.newegg.com/Creality-K2-Pro-Combo/p/N82E16828285069",
+      "phase": "normal",
+      "iteration": 2,
+      "title": "Creality K2 Pro Combo 3D Printer + CFS, 600mm/s, 300x300x300mm Build Volume, Active Chamber Heating, Dual AI Cameras, Auto Leveling, ABS/ASA/PLA-CF Ready",
+      "price": 799.99,
+      "currency": "USD",
+      "in_stock": null,
+      "sku": null,
+      "method": "http:selector",
+      "error": null,
+      "approx_in_preferred": {
+        "currency": "CAD",
+        "amount": 1095.88,
+        "rate_source": "static",
+        "rate_as_of": null,
+        "basis": "indicative static fallback rate (live rates unavailable), not a quote \u2014 report the price above in USD and present this only as an approximation"
+      },
+      "seconds": 0.14
+    },
+    {
+      "store": "sunlu",
+      "url": "https://store.sunlu.com/products/filament-dehumidifying-cabinet-filadc-i10",
+      "phase": "normal",
+      "iteration": 2,
+      "title": "[Pre-order] FilaDC i10 Filament Dehumidifying Cabinet",
+      "price": 249.99,
+      "currency": "CAD",
+      "in_stock": true,
+      "sku": "S-IN-DC-I10_INS-BK-US-NA-CD-CA",
+      "method": "shopify-json",
+      "error": null,
+      "extra": {
+        "variant": "Ship to USA/EU/CA/AU / Ship to Canada / FilaDC i10 / 1 unit"
+      },
+      "seconds": 8.38
+    },
+    {
+      "store": "kb3d",
+      "url": "https://kb-3d.com/store/stepper-motors-servos/11264-ldo-stepper-motor-nema-14-36sth20-1004ahig7t-1642876241077.html",
+      "phase": "normal",
+      "iteration": 2,
+      "title": "LDO Stepper Motor - Nema 14 - 36STH20-1004AHIG(7T) LDO Stepper Motor - Nema 14 - 36STH20-1004AHIG(7T)",
+      "price": 20.99,
+      "currency": "USD",
+      "in_stock": true,
+      "sku": null,
+      "method": "http:microdata",
+      "error": null,
+      "approx_in_preferred": {
+        "currency": "CAD",
+        "amount": 28.75,
+        "rate_source": "static",
+        "rate_as_of": null,
+        "basis": "indicative static fallback rate (live rates unavailable), not a quote \u2014 report the price above in USD and present this only as an approximation"
+      },
+      "seconds": 0.37
+    },
+    {
+      "store": "memoryexpress",
+      "url": "https://www.memoryexpress.com/Products/MX00132891",
+      "phase": "normal",
+      "iteration": 2,
+      "title": "Gaming V16 V3607VU-DS73-CA w/ GeForce RTX 4050, Core\u2122 7 240H, 16GB, 512GB SSD, 16in WUXGA 144Hz, Wi-Fi 6, Win 11 Home",
+      "price": 1399.99,
+      "currency": "CAD",
+      "in_stock": null,
+      "sku": null,
+      "method": "http:selector",
+      "error": null,
+      "seconds": 0.15
+    },
+    {
+      "store": "amazon",
+      "url": "https://www.amazon.ca/dp/B0CXG4WG1L",
+      "phase": "normal",
+      "iteration": 2,
+      "title": "Logitech MX Master 3S, Black (Renewed)",
+      "price": 114.99,
+      "currency": "CAD",
+      "in_stock": true,
+      "sku": "B0CXG4WG1L",
+      "method": "http:amazon-dom",
+      "error": null,
+      "seconds": 1.57
+    },
+    {
+      "store": "amazon",
+      "url": "https://www.amazon.ca/dp/B0CMVDQKWK",
+      "phase": "normal",
+      "iteration": 2,
+      "title": "Logitech MX Anywhere 3S Compact Wireless Mouse, Fast Scrolling, 8K DPI Any-Surface Tracking, Quiet Clicks, Programmable Buttons, USB C, Bluetooth, Windows PC, Linux, Chrome, Mac - Pale Grey (Renewed)",
+      "price": 86.99,
+      "currency": "CAD",
+      "in_stock": null,
+      "sku": "B0CMVDQKWK",
+      "method": "http:amazon-dom",
+      "error": null,
+      "extra": {
+        "list_price": "123.99"
+      },
+      "seconds": 2.98
+    },
+    {
+      "store": "walmart",
+      "url": "https://www.walmart.com/ip/500903542",
+      "phase": "normal",
+      "iteration": 2,
+      "title": null,
+      "price": null,
+      "currency": "USD",
+      "in_stock": null,
+      "sku": null,
+      "method": "browser:failed",
+      "error": "no price for the requested product in page",
+      "seconds": 13.74
+    },
+    {
+      "store": "walmart",
+      "url": "https://www.walmart.com/ip/Wireless-Mouse-Logitech-M185-Wireless-Mouse-Black/908154695",
+      "phase": "normal",
+      "iteration": 2,
+      "title": "Wireless Mouse - Logitech M185 Wireless Mouse,Black",
+      "price": 14.0,
+      "currency": "USD",
+      "in_stock": false,
+      "sku": "908154695",
+      "method": "http:next-data",
+      "error": null,
+      "extra": {
+        "seller": "The Deal Source",
+        "offer_id": "272F3D7FF6F73574926D6D0890CAFC13"
+      },
+      "approx_in_preferred": {
+        "currency": "CAD",
+        "amount": 19.18,
+        "rate_source": "static",
+        "rate_as_of": null,
+        "basis": "indicative static fallback rate (live rates unavailable), not a quote \u2014 report the price above in USD and present this only as an approximation"
+      },
+      "seconds": 1.53
+    },
+    {
+      "store": "walmart",
+      "url": "https://www.walmart.ca/en/ip/Logitech-M185-Wireless-Mouse/6000195939151",
+      "phase": "normal",
+      "iteration": 2,
+      "title": "Logitech M185 Wireless Mouse",
+      "price": 19.88,
+      "currency": "CAD",
+      "in_stock": true,
+      "sku": "6000195939151",
+      "method": "http:next-data",
+      "error": null,
+      "extra": {
+        "seller": "MAA-Canada",
+        "offer_id": "27B326AB3B6A328F86C6944DD64A1F23"
+      },
+      "seconds": 0.92
+    },
+    {
+      "store": "amazon",
+      "url": "https://www.amazon.com/dp/B0FWJBDX6Z",
+      "phase": "forced-browser",
+      "iteration": 1,
+      "title": "SainSmart SUNLU AMS Heater Upgrade for Bambu Lab AMS Gen 1, Simultaneous Filament Drying & Printing, Fast 70\u00b0C Heating, Smart Humidity Control, 4-Roll Capacity, Easy 2-Min Install (AMS Not Included)",
+      "price": 140.07,
+      "currency": "CAD",
+      "in_stock": true,
+      "sku": "B0FWJBDX6Z",
+      "method": "browser:amazon-dom",
+      "error": null,
+      "extra": {
+        "list_price": "168.08",
+        "note": "amazon.com showed this price in CAD because the visitor is abroad; the listing bills in USD, and the converted figure changes from one read to the next \u2014 track it on the regional storefront instead"
+      },
+      "seconds": 3.44
+    },
+    {
+      "store": "walmart",
+      "url": "https://www.walmart.com/ip/AirPods-Pro-3/17835006350",
+      "phase": "forced-browser",
+      "iteration": 1,
+      "title": "Apple AirPods Pro 3",
+      "price": 199.0,
+      "currency": "USD",
+      "in_stock": false,
+      "sku": "17835006350",
+      "method": "browser:next-data",
+      "error": null,
+      "extra": {
+        "seller": "Walmart.com",
+        "offer_id": "DB27655FBBD03715AAB377A0626F81CA"
+      },
+      "approx_in_preferred": {
+        "currency": "CAD",
+        "amount": 272.6,
+        "rate_source": "static",
+        "rate_as_of": null,
+        "basis": "indicative static fallback rate (live rates unavailable), not a quote \u2014 report the price above in USD and present this only as an approximation"
+      },
+      "seconds": 3.3
+    },
+    {
+      "store": "memoryexpress",
+      "url": "https://www.memoryexpress.com/Products/MX00132891",
+      "phase": "forced-browser",
+      "iteration": 1,
+      "title": "Gaming V16 V3607VU-DS73-CA w/ GeForce RTX 4050, Core\u2122 7 240H, 16GB, 512GB SSD, 16in WUXGA 144Hz, Wi-Fi 6, Win 11 Home",
+      "price": 1399.99,
+      "currency": "CAD",
+      "in_stock": null,
+      "sku": null,
+      "method": "browser:selector",
+      "error": null,
+      "seconds": 1.97
+    },
+    {
+      "store": "amazon",
+      "url": "https://www.amazon.ca/dp/B0CXG4WG1L",
+      "phase": "forced-browser",
+      "iteration": 1,
+      "title": "Logitech MX Master 3S, Black (Renewed)",
+      "price": 114.99,
+      "currency": "CAD",
+      "in_stock": true,
+      "sku": "B0CXG4WG1L",
+      "method": "browser:amazon-dom",
+      "error": null,
+      "seconds": 3.22
+    },
+    {
+      "store": "amazon",
+      "url": "https://www.amazon.ca/dp/B0CMVDQKWK?th=1",
+      "phase": "forced-browser",
+      "iteration": 1,
+      "title": "Logitech MX Anywhere 3S Compact Wireless Mouse, Fast Scrolling, 8K DPI Any-Surface Tracking, Quiet Clicks, Programmable Buttons, USB C, Bluetooth, Windows PC, Linux, Chrome, Mac - Pale Grey (Renewed)",
+      "price": 86.99,
+      "currency": "CAD",
+      "in_stock": null,
+      "sku": "B0CMVDQKWK",
+      "method": "browser:amazon-dom",
+      "error": null,
+      "extra": {
+        "list_price": "123.99"
+      },
+      "seconds": 3.14
+    },
+    {
+      "store": "walmart",
+      "url": "https://www.walmart.com/ip/500903542",
+      "phase": "forced-browser",
+      "iteration": 1,
+      "title": null,
+      "price": null,
+      "currency": "USD",
+      "in_stock": null,
+      "sku": null,
+      "method": "browser:failed",
+      "error": "no price for the requested product in page",
+      "seconds": 11.18
+    },
+    {
+      "store": "walmart",
+      "url": "https://www.walmart.com/ip/Wireless-Mouse-Logitech-M185-Wireless-Mouse-Black/908154695",
+      "phase": "forced-browser",
+      "iteration": 1,
+      "title": "Wireless Mouse - Logitech M185 Wireless Mouse,Black",
+      "price": 14.0,
+      "currency": "USD",
+      "in_stock": false,
+      "sku": "908154695",
+      "method": "browser:next-data",
+      "error": null,
+      "extra": {
+        "seller": "The Deal Source",
+        "offer_id": "272F3D7FF6F73574926D6D0890CAFC13"
+      },
+      "approx_in_preferred": {
+        "currency": "CAD",
+        "amount": 19.18,
+        "rate_source": "static",
+        "rate_as_of": null,
+        "basis": "indicative static fallback rate (live rates unavailable), not a quote \u2014 report the price above in USD and present this only as an approximation"
+      },
+      "seconds": 3.08
+    },
+    {
+      "store": "walmart",
+      "url": "https://www.walmart.ca/en/ip/Logitech-M185-Wireless-Mouse/6000195939151",
+      "phase": "forced-browser",
+      "iteration": 1,
+      "title": null,
+      "price": null,
+      "currency": "USD",
+      "in_stock": null,
+      "sku": null,
+      "method": "browser:failed",
+      "error": "no price for the requested product in page",
+      "seconds": 9.81
+    }
+  ]
+}

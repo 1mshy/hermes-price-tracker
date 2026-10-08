@@ -2,7 +2,7 @@
 name: price-tracking
 description: Research prices across tech and 3D-printing retailers, check Reddit deal chatter, and set up price-drop alerts and scheduled checks. Use whenever the user asks what something costs, where it is cheapest, whether a deal is good, mentions a price seen on Reddit, asks to be told when a price falls, or wants to know when something is back in stock.
 metadata:
-  version: 1.7.0
+  version: 1.8.0
 ---
 
 # Price research and tracking
@@ -17,8 +17,8 @@ returns, with the store name and URL beside every figure.
 | --- | --- |
 | "What does X cost?" / "Where is X cheapest?" | `compare_prices` (`country: "CA"` = only stores selling in Canada) |
 | A price for one specific page they linked | `get_price` |
-| "Tell me when this link drops below $N" | `track_product_url` |
-| "Watch X everywhere and alert me" | `track_product_description` |
+| "Watch this" / a product link or name / "Tell me when this drops below $N" | `add_watch` (one input; saves immediately and retries discovery automatically) |
+| "Watch X everywhere and alert me" | `add_watch` |
 | "Tell me when X is back in stock" | `track_product_url` / `track_product_description` with `alert_on_restock=true` |
 | "What am I watching?" | `list_trackers` |
 | "Is this actually a good price?" | `get_price_history` |
@@ -32,13 +32,30 @@ returns, with the store name and URL beside every figure.
 | "How fresh is that conversion?" / "Where did that ≈ figure come from?" | `get_exchange_rates` |
 | "Which stores sell in my country?" / picking `stores` keys | `list_stores` (each store carries `country`) |
 
+## Add a watch without a questionnaire
+
+Use `add_watch` for ordinary watch requests: pass the pasted URL or product name
+as the input and any explicit target/restock preference. When no condition was
+specified, use its built-in **5% price-drop default**, then confirm that rule in
+a short sentence. Do not ask the user to pick stores, configure a schedule or
+choose notification channels before saving. Use their existing currency and
+channels. Do not add restock alerts unless requested.
+
+A watch saved with discovery pending is still saved: say "Saved; I'll find a
+listing and watch for a 5% drop" when that is the returned state. The engine
+retries it automatically. Never claim that a price was verified or an alert is
+ready before a baseline has been found. Do not make the user repeatedly submit
+a link because the first fetch failed. Reuse/update an existing watch when the
+same product is already saved, instead of creating duplicates.
+
 ## Identifying the product precisely
 
 Cross-store matching is only as good as the description you pass. Before calling
 `compare_prices` or `track_product_description`, make sure you have brand, model
 **and** variant. "A Bambu printer" is not enough; "Bambu Lab P1S Combo with AMS"
-is. If the user is vague, ask one clarifying question rather than guessing —
-tracking the wrong variant produces confidently wrong alerts.
+is. Use the product name or URL they gave and save the watch first. Ask one short
+clarifying question only when different models or variants would materially
+change the product; never turn an ordinary link into an interview.
 
 Watch for near-miss models: MK4S is not MK4, P1S is not P1P, and an A1 mini is not
 an A1. If results come back mixing these, say so and confirm which one they meant.
@@ -46,8 +63,9 @@ an A1. If results come back mixing these, say so and confirm which one they mean
 Over-specifying does not break search anymore: when a fully detailed description
 returns nothing, the engine automatically retries with the compact core (brand +
 model) and reports what it searched in `search_terms_used`. So if a comparison
-still comes back empty, the product genuinely is not in the store catalogs —
-say that rather than retrying the same tool with reworded queries.
+still comes back empty, that search did not establish a match; coverage or
+access may be incomplete. Keep a saved watch pending, try a specific retailer
+link when available, and let discovery retry instead of looping over rewordings.
 
 Some marketplaces are **search-only**: AliExpress prices appear in
 `compare_prices` (frequently the cheapest, since OEMs sell direct there) but
@@ -113,16 +131,16 @@ listing is foreign.
 
 ## Setting up an alert
 
-Every watch needs at least one condition — the engine refuses one with none:
+A watch has at least one condition (`add_watch` supplies a 5% drop by default):
 
 - `target_price` — absolute dollar threshold, best when the user names a number.
 - `drop_pct` — percentage below the price at the moment the watch is created.
 - `alert_on_restock=true` — tell the user when a sold-out listing comes back.
 
-If the user says something loose like "tell me if it goes on sale", propose a
-concrete rule (a 10–15% drop is a reasonable default) and confirm it rather than
-silently picking one. After creating a watch, tell them the current price, the
-condition, and which channels will notify them.
+If the user says "tell me if it goes on sale", save it with `add_watch` and its
+5% price-drop default. After saving, confirm the condition and notification
+channels briefly; include a current price only when verified. The user can
+change the rule afterward.
 
 ### Back-in-stock watches
 
@@ -205,27 +223,34 @@ job shows as scheduled with a next-run time. If the cronjob tool is not
 available in your session, say so — do not silently fall back to pretending a
 watch exists.
 
-Delivery honesty: a cron job's *final response* only goes where its
-`deliver` target points. `local` is a file inside the container (`hermes cron
-runs` shows it) — the user never sees it as a push, and for twelve days a
-morning briefing found deals and delivered them to that file. To reach the
-user from a scheduled job, call **`notify_user`**: it pushes through the same
-channels as the price alerts (ntfy, Discord, Signal, WhatsApp — whatever
-`check_notifications` reports) and, with `tracker_id`, is recorded in
-`list_alert_events` as kind `agent`, so the next run can see what was already
-sent. Never shell out to `curl` for a notification. A job can additionally be
-created with `deliver=discord` when the Discord gateway is connected, which
-posts its final response to the home channel without relying on the model.
-Whenever you set up either kind of schedule, state exactly how — and whether —
-the user will be notified.
+### Quiet, useful scheduled work
 
-Push policy for scheduled sweeps: a concrete price or coupon claim about a
-watched product that is less than a day old is worth a push even when it
-could not be verified live (say "unverified" and "reported expired" as
-appropriate) — the user would rather hear about a recurring coupon early than
-after it lapsed. Check `list_alert_events` first and do not push the same
-thread twice unless something changed. Standing prices the tracker already
-watches are not news.
+Create shopping cron jobs with **`deliver=local`**. Their final response and
+scheduler errors then stay in the local run log. Send useful results explicitly
+with `notify_user`, including `tracker_id` so `list_alert_events` can deduplicate
+them. Never combine an explicit notification with a Discord-delivered final
+response. A quiet run returns `NO_REPLY`; no "no deals", "still watching", "not
+working", or repeated blocked-source messages.
+
+Use `list_trackers` as the current shopping list instead of hardcoded products
+or prices. On a failed source, try a different supported store and continue
+working on the rest. If a watch has no working listings, `broaden_coverage` can
+find and save confident alternatives. `refresh_prices_now` is useful once when
+a catch-up is needed, not repeatedly for a source that blocks access. Do not
+change saved targets or disable watches merely because a source failed.
+
+Push only a new useful buying opportunity: a verified saved condition not
+already reported by the engine, a usable coupon, or a fresh, concrete unverified
+coupon with a product link and instructions the user can try. State verification
+and actual currency. Do not send expired offers or repeat standing prices.
+Check `list_alert_events` across agent and price alerts before sending; a prior
+thread is news again only when price, usable coupon or availability improves.
+Check `delivered` before claiming a message reached the user.
+
+Persistent failures belong to the independent no-agent health watchdog. It
+attempts safe recovery, logs temporary failures locally, and sends one concise
+notice only for a persistent incident requiring attention. Do not create
+parallel error-notification jobs or push the same incident yourself.
 
 ## How the engine fetches (don't reinvent it)
 
@@ -265,9 +290,9 @@ rather than guessing or hand-fetching.
 - Always include the store and a link.
 - Flag when something is out of stock — a low price on an unavailable item is not
   a deal.
-- If a store returns `NEEDS-KEY` or an error, say which store failed and why
-  instead of quietly dropping it from the comparison. `engine_status` explains
-  what is configured.
+- In a requested comparison, summarize material coverage gaps in one short
+  line after the useful results. `engine_status` explains the configuration.
+  In scheduled work, log gaps locally and continue; do not push store errors.
 - Prices come from different stores in different currencies; always state the
   currency when it is not the user's preferred one (see "Currency and region").
 

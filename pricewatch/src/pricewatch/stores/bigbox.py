@@ -351,24 +351,29 @@ class AmazonAdapter(StoreAdapter):
             doc = lxml_html.fromstring(page_text)
         except Exception:
             return None
-        # Prefer the exact buy-box JSON, then the DOM price spans. Keep the
-        # text the figure came with: on .com it is the only currency evidence.
+        # Scope the DOM to the buy box before looking at embedded state;
+        # recommendation widgets can carry the same priceAmount keys.
         price = None
         price_text = ""
-        # The whole page, not a prefix: on deal pages the buy-box JSON sits
-        # past the 800 KB mark, behind the badge and countdown markup.
-        m = _PRICE_AMOUNT_RE.search(page_text)
-        if m:
-            price = parse_price(m.group(1))
-            price_text = m.group(2)
-        if price is None:
-            for container in self._PRICE_CONTAINERS:
-                for span in doc.xpath(container + self._PRICE_SPAN):
-                    price, price_text = self._span_price(span)
-                    if price:
-                        break
+        for container in self._PRICE_CONTAINERS:
+            for span in doc.xpath(container + self._PRICE_SPAN):
+                price, price_text = self._span_price(span)
                 if price:
                     break
+            if price:
+                break
+        amounts = set(_PRICE_AMOUNT_RE.findall(page_text))
+        if price is None:
+            if len(amounts) == 1:
+                amount, price_text = amounts.pop()
+                price = parse_price(amount)
+        elif not re.search(r"\b(?:USD|CAD|GBP|EUR|AUD)\b|CDN|CA\$", price_text, re.I):
+            # Amazon.com can print a bare '$' in the DOM while the matching
+            # buy-box state explicitly says CAD for a Canadian visitor.
+            # Corroborate the selected amount, never take another item's price.
+            currencies = {symbol for amount, symbol in amounts if parse_price(amount) == price}
+            if len(currencies) == 1:
+                price_text = currencies.pop()
         if price is None:
             for xpath in self._PRICE_XPATHS:
                 for hit in doc.xpath(xpath):
@@ -413,7 +418,9 @@ class AmazonAdapter(StoreAdapter):
             store=self.name, url=url,
             title=(title[0].strip() if title else None), price=price,
             currency=currency,
-            in_stock=("unavailable" not in availability and "out of stock" not in availability),
+            in_stock=(False if any(w in availability for w in ("unavailable", "out of stock"))
+                      else True if any(w in availability for w in ("in stock", "left in stock", "ships"))
+                      else None),
             sku=asin, extra=extra,
         )
 
@@ -437,15 +444,19 @@ class AmazonAdapter(StoreAdapter):
         return f"https://www.{target}/dp/{asin.group(1)}"
 
     async def fetch_offer(self, url: str) -> StoreResult:
-        asin_match = ASIN_RE.search(url)
-        asin = asin_match.group(1) if asin_match else None
-
-        # Keepa is allowed, cheap and reliable — always prefer it when configured.
-        if asin:
-            keepa = await KeepaAmazon.lookup(asin, host=host_of(url))
+        result = await self._fetch_direct(url)
+        match = ASIN_RE.search(url)
+        if not result.ok and "not-found" not in result.method and match:
+            keepa = await KeepaAmazon.lookup(match.group(1), host=host_of(url))
             if keepa is not None:
                 keepa.url = url
+                keepa.extra["direct_fetch_error"] = result.error
                 return keepa
+        return result
+
+    async def _fetch_direct(self, url: str) -> StoreResult:
+        asin_match = ASIN_RE.search(url)
+        asin = asin_match.group(1) if asin_match else None
 
         # Fast path: a fingerprinted GET now clears Amazon's wall on most product
         # pages in ~1s, no browser and no Keepa key needed.
@@ -478,7 +489,7 @@ class AmazonAdapter(StoreAdapter):
 
         if page.looks_blocked:
             return StoreResult(store=self.name, url=url, method="browser:blocked",
-                               error="Amazon served a bot challenge — set KEEPA_API_KEY for reliable pricing")
+                               error="Amazon served a bot challenge; configure KEEPA_API_KEY or the optional product API fallback")
         parsed = self._parse(page.url, page.text, asin)
         if parsed is None:
             return StoreResult(store=self.name, url=url, method="browser:failed",
@@ -497,14 +508,24 @@ class AmazonAdapter(StoreAdapter):
         """
         host = self.storefront() or self.domains[0]
         url = f"https://www.{host}/s?k={quote_plus(query)}"
+        page = None
         try:
             page = await fetcher.get(url)
-        except Exception:                              # noqa: BLE001 — network
+        except Exception:
+            pass
+        try:
+            found = ([] if page is None or page.looks_blocked or page.status != 200 else
+                     parse_amazon_search(page.text, storefront=host,
+                                         currency=self._currency_for(url, page.text)))
+            if not found and settings.pw_browser_enabled:
+                page = await fetcher.render(url, wait_for="[data-component-type='s-search-result']")
+                if not page.looks_blocked and page.status == 200:
+                    found = parse_amazon_search(page.text, storefront=host,
+                                                currency=self._currency_for(url, page.text))
+            for item in found:
+                item.method = f"{page.method}:amazon-search"
+        except Exception:
             return []
-        if page.status != 200 or page.looks_blocked:
-            return []
-        found = parse_amazon_search(page.text, storefront=host,
-                                    currency=self._currency_for(url, page.text))
         # Amazon orders the page by its own interests: the first cards are paid
         # placements and loose category matches. Rank against the query before
         # truncating, or a limit of 3 returns three ads and drops the product
@@ -523,47 +544,86 @@ class WalmartAdapter(StoreAdapter):
     name = "walmart"
     domains = ("walmart.com", "walmart.ca")
 
-    async def fetch_offer(self, url: str) -> StoreResult:
-        # A fingerprinted GET returns Walmart's full PDP (with __NEXT_DATA__) in
-        # ~1s; only fall back to a browser if that comes back challenged.
-        try:
-            page = await fetcher.get_or_render(
-                url, wait_for="[itemprop='price'], [data-testid='price-wrap']")
-        except Blocked as exc:
-            return StoreResult(store=self.name, url=url, method="blocked", error=str(exc))
-        except Exception as exc:
-            return StoreResult(store=self.name, url=url, error=f"render failed: {exc}")
+    @staticmethod
+    def _item_id(url: str) -> str | None:
+        from urllib.parse import urlsplit
+        match = re.search(r"/ip/(?:[^/]+/)?([A-Za-z0-9]+)$", urlsplit(url).path.rstrip("/"))
+        return match.group(1) if match else None
 
-        # walmart.ca is the same Next.js PDP billing CAD; when the payload
-        # omits the currency the domain is the answer, not USD.
+    def _parse(self, page, requested_url: str) -> StoreResult | None:
+        if page.looks_blocked or not 200 <= page.status < 400:
+            return None
         host = host_of(page.url)
         native = currency_for_host(host, settings.pw_currency)
-        # Walmart ships the whole PDP state in __NEXT_DATA__.
-        match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', page.text, re.S)
-        if match:
+        wanted = self._item_id(requested_url)
+        try:
+            doc = lxml_html.fromstring(page.text)
+        except Exception:
+            return None
+        for blob in doc.xpath("//script[@id='__NEXT_DATA__']/text()"):
             try:
-                data = json.loads(match.group(1))
-                product = (data["props"]["pageProps"]["initialData"]["data"]["product"])
-                price_info = product.get("priceInfo") or {}
-                current = (price_info.get("currentPrice") or {})
+                data = json.loads(blob)
+                initial = data.get("props", {}).get("pageProps", {}).get("initialData", {})
+                product = (initial.get("data") or {}).get("product") or initial.get("product") or {}
+                actual = str(product.get("usItemId") or product.get("itemId") or "")
+                if wanted and actual and wanted != actual:
+                    # A redirect or selected variant is a different listing.
+                    return StoreResult(store=self.name, url=requested_url,
+                                       method=f"{page.method}:item-mismatch",
+                                       error=f"Walmart returned item {actual} instead of requested item {wanted}")
+                current = (product.get("priceInfo") or {}).get("currentPrice") or {}
                 price = parse_price(current.get("price"))
-                if price:
+                if (price is None and actual == wanted and product.get("name")
+                        and product.get("availabilityStatus") == "OUT_OF_STOCK"):
+                    return StoreResult(store=self.name, url=page.url, title=product["name"],
+                                       sku=actual, currency=native, in_stock=False,
+                                       method=f"{page.method}:unavailable",
+                                       error="Walmart marks this item out of stock and publishes no current price")
+                if price is not None and price > 0:
+                    stock = {"IN_STOCK": True, "OUT_OF_STOCK": False,
+                             "NOT_AVAILABLE": False}.get(product.get("availabilityStatus"))
                     return StoreResult(
                         store=self.name, url=page.url, title=product.get("name"),
                         price=price, currency=current.get("currencyUnit") or native,
-                        in_stock=(product.get("availabilityStatus") == "IN_STOCK"),
-                        sku=str(product.get("usItemId") or ""), method=f"{page.method}:next-data",
-                    )
-            except Exception:
-                pass
-
-        found = extract(page.text, default_currency=native, host=host)
+                        in_stock=stock, sku=actual or wanted,
+                        method=f"{page.method}:next-data",
+                        extra={"seller": product.get("sellerDisplayName"),
+                               "offer_id": product.get("offerId")})
+            except (ValueError, TypeError, AttributeError):
+                continue
+        # Do not treat installment payments or recommended products embedded
+        # in unrelated JSON as this product's price.
+        found = extract(page.text, default_currency=native, host=host,
+                        url=requested_url, allow_heuristic=False)
         if found.ok:
             return StoreResult(store=self.name, url=page.url, title=found.title, price=found.price,
                                currency=found.currency or native, in_stock=found.in_stock,
-                               method=f"{page.method}:{found.method}")
-        reason = "bot challenge" if page.looks_blocked else "no price in page"
-        return StoreResult(store=self.name, url=url, method="browser:failed", error=reason)
+                               sku=found.sku or wanted, method=f"{page.method}:{found.method}")
+        return None
+
+    async def fetch_offer(self, url: str) -> StoreResult:
+        wait_for = "[itemprop='price'], [data-testid='price-wrap'], [data-testid='price-product']"
+        try:
+            page = await fetcher.get_or_render(url, wait_for=wait_for)
+            if page.status in (404, 410):
+                return StoreResult(store=self.name, url=url, method=f"{page.method}:not-found",
+                                   error=f"Walmart product not found (HTTP {page.status})")
+            result = self._parse(page, url)
+            if result:
+                return result
+            # HTTP 200 can be an app shell. A successful transport isn't a
+            # successful price read, so escalate on extraction failure too.
+            if page.method == "http" and settings.pw_browser_enabled:
+                page = await fetcher.render(url, wait_for=wait_for)
+                result = self._parse(page, url)
+                if result:
+                    return result
+        except Blocked as exc:
+            return StoreResult(store=self.name, url=url, method="blocked", error=str(exc))
+        except Exception:
+            return StoreResult(store=self.name, url=url, error="Walmart page request failed")
+        reason = "bot challenge" if page.looks_blocked else "no price for the requested product in page"
+        return StoreResult(store=self.name, url=url, method=f"{page.method}:failed", error=reason)
 
 
 def browser_store(name: str, domains: tuple[str, ...], wait_for: str | None = None) -> StoreAdapter:
@@ -581,23 +641,31 @@ class SelectorAdapter(StoreAdapter):
 
     def __init__(self, name: str, domains: tuple[str, ...], price_xpaths: tuple[str, ...],
                  title_xpaths: tuple[str, ...] = (), stock_xpath: str | None = None,
-                 out_of_stock_words: tuple[str, ...] = ("out of stock", "sold out", "unavailable")):
+                 out_of_stock_words: tuple[str, ...] = ("out of stock", "sold out", "unavailable"),
+                 currency: str | None = None, force_browser: bool = False,
+                 wait_for: str | None = None):
         self.name = name
         self.domains = domains
         self.price_xpaths = price_xpaths
         self.title_xpaths = title_xpaths
         self.stock_xpath = stock_xpath
         self.out_of_stock_words = out_of_stock_words
+        self.currency = currency
+        self.force_browser = force_browser
+        self.wait_for = wait_for
 
     async def fetch_offer(self, url: str) -> StoreResult:
         # Fingerprinted GET first (these DOM-price stores serve fine over HTTP);
         # get_or_render escalates to a browser only if the host actually needs one.
         try:
-            page = await fetcher.get_or_render(url)
+            page = await fetcher.get_or_render(url, browser_first=self.force_browser, wait_for=self.wait_for)
         except Blocked as exc:
             return StoreResult(store=self.name, url=url, method="blocked", error=str(exc))
         except Exception as exc:
             return StoreResult(store=self.name, url=url, error=f"render failed: {exc}")
+        if page.status in (404, 410):
+            return StoreResult(store=self.name, url=url, method=f"{page.method}:not-found",
+                               error=f"product not found (HTTP {page.status})")
         if page.looks_blocked:
             return StoreResult(store=self.name, url=url, method=f"{page.method}:blocked",
                                error="bot challenge")
@@ -622,8 +690,8 @@ class SelectorAdapter(StoreAdapter):
         # glyph means, both for the selector hit and the structured fallback —
         # and a price node with no glyph at all (themes often put the "$" in
         # a sibling span) is the host's money too, not the global default.
-        host = host_of(page.url)
-        native = currency_for_host(host, settings.pw_currency)
+        host = None if self.currency else host_of(page.url)
+        native = self.currency or currency_for_host(host, settings.pw_currency)
         if price is None:
             found = extract(page.text, default_currency=native, host=host)
             if found.ok:

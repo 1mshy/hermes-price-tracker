@@ -13,3 +13,4 @@ CLAUDE.md
 *.egg-info/
 .venv/
 backups/
+data/browser_sessions/

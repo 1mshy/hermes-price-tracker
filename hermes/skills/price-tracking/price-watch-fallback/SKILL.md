@@ -2,7 +2,7 @@
 name: price-watch-fallback
 description: Read prices and build silent price alerts when the pricewatch engine can't reach a store (bot challenges, missing API keys). Amazon fallback with direct curl + parse patterns, and the no_agent cron watchdog pattern.
 metadata:
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # Price fallbacks and silent watchdogs
@@ -70,8 +70,8 @@ Steps:
 2. Test the **silent path** for real: run the script, expect exit 0 and no output.
 3. Test the **alert path**: simulate a low price (e.g. string-replace the `priceAmount` in a fetched page and run the parser against it). If the user declines the verification step, explicitly say the alert branch is unverified — never claim the job is proven.
 4. Create the cron job: `cronjob action=create`, `no_agent=true`, `script=<path>`, `schedule='30m'` (or the interval the user names). Leave `prompt` empty (ignored in no_agent mode).
-5. Set the threshold the user named; if they were vague, propose a concrete one and confirm before creating the job.
-6. Verify it stuck: `cronjob action=list` must show the job with a next-run
+5. Keep the threshold already saved for the watch. For a new vague request, prefer `add_watch` and its 5% default so a separate script is unnecessary.
+6. Use `deliver=local` for scripts that push their own alerts so stdout cannot duplicate them. Verify it stuck: `cronjob action=list` must show the job with a next-run
    time. Jobs are executed by the gateway service's cron ticker (`docker
    compose up -d gateway` on the host runs it); if the list shows the job but
    `cronjob action=status`-style checks say the scheduler is not running, tell
@@ -91,6 +91,32 @@ both, and also checks the LLM endpoint and the cron jobs' failure streaks —
 an agent that cannot reach its model fails every scheduled sweep silently.
 From an agent-driven job, call `notify_user` instead. Say plainly when no
 channel is configured.
+
+`/api/notify` answers HTTP 200 whether or not anything went out; only the
+JSON `delivered` flag (and `channels`) says so. A script must read it, fall
+back to ntfy directly when it is false, and not record "sent" state it cannot
+prove. The host is a laptop: a job that catches up right after a wake fires
+before Docker's DNS is back. Resolve the engine first with bounded retries;
+resolve ntfy separately only when a notification is due. An unavailable
+notification host must never block the price checks. The watchdog template is
+installed to `$HERMES_HOME/scripts/` by the container's init hook on every boot; do not edit the installed copy.
+
+### Recover quietly before escalating
+
+The health watchdog attempts one catch-up for an overdue sweep and restores a
+missing schedule using the existing cadence. It checks every active watch's
+coverage, so one blocked alternate retailer does not look like a failed watch.
+It saves detailed diagnostics in `$HERMES_HOME/cron/health_watchdog_status.json`.
+
+Temporary problems and successful recoveries are silent. A problem must persist
+for two watchdog runs before it can notify; each incident is sent once until it
+recovers. Changing error counts or one unrelated issue clearing cannot resend an
+old incident. Failed deliveries are retried without being marked as sent. The
+script produces no stdout because it delivers its own actionable notices.
+
+Do not create another cron job just to repeat failures. During agent work, try
+one useful fallback, continue with the other products, and let this watchdog
+handle service incidents.
 
 ## 3. Generalizing beyond Amazon
 
@@ -116,8 +142,8 @@ price from another.
 
 `track_product_description` / `compare_prices` now retry an over-detailed
 description with its compact core (brand + model) automatically — the
-response's `search_terms_used` shows what was actually searched. So a zero-hit
-result means the catalog stores genuinely don't list it under that name: do
-not burn turns rewording the same query. Instead, verify the price on a
-specific listing via the direct-fetch patterns in section 1, then use
-`track_product_url` on that URL.
+response's `search_terms_used` shows what was actually searched. A zero-hit
+result establishes no match; it does not prove the product is unavailable. Save
+the request with `add_watch` so discovery can retry, and try a specific retailer
+link when available. Do not burn turns rewording the same query or asking the
+user to resubmit a watch.

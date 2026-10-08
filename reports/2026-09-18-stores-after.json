@@ -1,0 +1,914 @@
+[
+  {
+    "key": "amazon",
+    "label": "Amazon",
+    "kind": "api",
+    "tags": [
+      "tech",
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://www.amazon.com/dp/B0FWJBDX6Z",
+    "discovery": "catalog-seed",
+    "price": 140.07,
+    "currency": "CAD",
+    "in_stock": true,
+    "method": "http:amazon-dom",
+    "title": "SainSmart SUNLU AMS Heater Upgrade for Bambu Lab AMS Gen 1, Simultaneo",
+    "error": null,
+    "searchable": true,
+    "seconds": 1.8
+  },
+  {
+    "key": "bestbuy",
+    "label": "Best Buy",
+    "kind": "api",
+    "tags": [
+      "tech"
+    ],
+    "status": "NEEDS-KEY",
+    "url": "https://www.bestbuy.com/site/6535723.p",
+    "discovery": "catalog-seed",
+    "price": null,
+    "currency": "USD",
+    "in_stock": null,
+    "method": "needs-key",
+    "title": "",
+    "error": "BESTBUY_API_KEY not set (free at developer.bestbuy.com)",
+    "searchable": true,
+    "seconds": 0.0
+  },
+  {
+    "key": "walmart",
+    "label": "Walmart",
+    "kind": "api",
+    "tags": [
+      "tech",
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://www.walmart.com/ip/17835006350",
+    "discovery": "catalog-seed",
+    "price": 199.0,
+    "currency": "USD",
+    "in_stock": false,
+    "method": "http:next-data",
+    "title": "Apple AirPods Pro 3",
+    "error": null,
+    "searchable": false,
+    "seconds": 1.5
+  },
+  {
+    "key": "ebay",
+    "label": "eBay",
+    "kind": "api",
+    "tags": [
+      "tech",
+      "3dprinting"
+    ],
+    "status": "NO-URL",
+    "url": null,
+    "discovery": "not-found",
+    "price": null,
+    "currency": null,
+    "in_stock": null,
+    "method": null,
+    "title": null,
+    "error": null,
+    "searchable": true,
+    "seconds": 6.8
+  },
+  {
+    "key": "aliexpress",
+    "label": "AliExpress",
+    "kind": "api",
+    "tags": [
+      "tech",
+      "3dprinting"
+    ],
+    "status": "LIMITED",
+    "url": "https://www.aliexpress.com/p/order/index.html",
+    "discovery": "homepage-scrape",
+    "price": null,
+    "currency": "USD",
+    "in_stock": null,
+    "method": "unsupported",
+    "title": "",
+    "error": "AliExpress product pages block automated reads from this host. Current prices are available via compare_prices (search), but this listing cannot be tracked \u2014 of",
+    "searchable": true,
+    "seconds": 5.7
+  },
+  {
+    "key": "newegg",
+    "label": "Newegg",
+    "kind": "selector",
+    "tags": [
+      "tech"
+    ],
+    "status": "OK",
+    "url": "https://www.newegg.com/Creality-K2-Pro-Combo/p/N82E16828285069",
+    "discovery": "catalog-seed",
+    "price": 799.99,
+    "currency": "USD",
+    "in_stock": null,
+    "method": "http:selector",
+    "title": "Creality K2 Pro Combo 3D Printer + CFS, 600mm/s, 300x300x300mm Build V",
+    "error": null,
+    "searchable": false,
+    "seconds": 0.2
+  },
+  {
+    "key": "microcenter",
+    "label": "Micro Center",
+    "kind": "browser",
+    "tags": [
+      "tech",
+      "3dprinting"
+    ],
+    "status": "BLOCKED",
+    "url": "https://www.microcenter.com/product/676670/",
+    "discovery": "catalog-seed",
+    "price": null,
+    "currency": "USD",
+    "in_stock": null,
+    "method": "blocked",
+    "title": "",
+    "error": "microcenter.com is known to block automated fetches \u2014 set PW_HTTP_PROXY (residential) or a store API key",
+    "searchable": false,
+    "seconds": 0.1
+  },
+  {
+    "key": "bhphoto",
+    "label": "B&H Photo",
+    "kind": "structured",
+    "tags": [
+      "tech"
+    ],
+    "status": "BLOCKED",
+    "url": null,
+    "discovery": "blocked",
+    "price": null,
+    "currency": null,
+    "in_stock": null,
+    "method": null,
+    "title": null,
+    "error": null,
+    "searchable": false,
+    "seconds": 9.5
+  },
+  {
+    "key": "adorama",
+    "label": "Adorama",
+    "kind": "browser",
+    "tags": [
+      "tech"
+    ],
+    "status": "BLOCKED",
+    "url": "https://www.adorama.com/apix1c.html",
+    "discovery": "catalog-seed",
+    "price": null,
+    "currency": "USD",
+    "in_stock": null,
+    "method": "blocked",
+    "title": "",
+    "error": "adorama.com is known to block automated fetches \u2014 set PW_HTTP_PROXY (residential) or a store API key",
+    "searchable": false,
+    "seconds": 0.1
+  },
+  {
+    "key": "target",
+    "label": "Target",
+    "kind": "browser",
+    "tags": [
+      "tech"
+    ],
+    "status": "BLOCKED",
+    "url": "https://www.target.com/p/-/A-88378272",
+    "discovery": "catalog-seed",
+    "price": null,
+    "currency": "USD",
+    "in_stock": null,
+    "method": "browser:failed",
+    "title": "",
+    "error": "bot challenge",
+    "searchable": false,
+    "seconds": 4.5
+  },
+  {
+    "key": "bestbuyca",
+    "label": "Best Buy Canada",
+    "kind": "api",
+    "tags": [
+      "tech",
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://www.bestbuy.ca/en-ca/product/bambu-lab-p2s-ams-combo/19854444",
+    "discovery": "catalog-seed",
+    "price": 999.99,
+    "currency": "CAD",
+    "in_stock": true,
+    "method": "bestbuyca-api",
+    "title": "Bambu Lab P2S AMS Combo Enclosed FDM 3D Printer - Multi-Colour Printin",
+    "error": null,
+    "searchable": true,
+    "seconds": 0.3
+  },
+  {
+    "key": "canadacomputers",
+    "label": "Canada Computers",
+    "kind": "api",
+    "tags": [
+      "tech",
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://www.canadacomputers.com/en/fdm-3d-printer/280601/bambu-lab-p1s-combo-3d-printer-bilingual-packaging-pf001-usa001-ca.html",
+    "discovery": "catalog-seed",
+    "price": 719.99,
+    "currency": "CAD",
+    "in_stock": true,
+    "method": "http:json-ld",
+    "title": "Bambu Lab P1S Combo 3D Printer, Bilingual packaging",
+    "error": null,
+    "searchable": true,
+    "seconds": 2.1
+  },
+  {
+    "key": "memoryexpress",
+    "label": "Memory Express",
+    "kind": "browser",
+    "tags": [
+      "tech"
+    ],
+    "status": "BLOCKED",
+    "url": null,
+    "discovery": "blocked",
+    "price": null,
+    "currency": null,
+    "in_stock": null,
+    "method": null,
+    "title": null,
+    "error": null,
+    "searchable": false,
+    "seconds": 9.8
+  },
+  {
+    "key": "bambulab",
+    "label": "Bambu Lab",
+    "kind": "structured",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://ca.store.bambulab.com/products/start-pause-button",
+    "discovery": "sitemap",
+    "price": 6.99,
+    "currency": "CAD",
+    "in_stock": true,
+    "method": "http:json-ld",
+    "title": "Start/Pause Button",
+    "error": null,
+    "searchable": false,
+    "seconds": 1.0
+  },
+  {
+    "key": "prusa",
+    "label": "Prusa Research",
+    "kind": "structured",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://www.prusa3d.com/product/original-prusa-xl-assembled-single-toolhead-3d-printer/",
+    "discovery": "homepage-scrape",
+    "price": 3329.0,
+    "currency": "CAD",
+    "in_stock": true,
+    "method": "http:json-ld",
+    "title": "Prusa XL+ Single-Tool",
+    "error": null,
+    "searchable": false,
+    "seconds": 8.9
+  },
+  {
+    "key": "elegoo",
+    "label": "Elegoo",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://us.elegoo.com/products/centauri-2-combo",
+    "discovery": "products.json",
+    "price": 329.0,
+    "currency": "USD",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "Centauri 2 Combo",
+    "error": null,
+    "searchable": true,
+    "seconds": 4.7
+  },
+  {
+    "key": "anycubic",
+    "label": "Anycubic",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://store.anycubic.com/products/11th-anniversary-materials-flash-deals",
+    "discovery": "products.json",
+    "price": 38.8,
+    "currency": "USD",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "Anycubic 11th Anniversary Materials Flash Deals",
+    "error": null,
+    "searchable": true,
+    "seconds": 5.6
+  },
+  {
+    "key": "creality",
+    "label": "Creality",
+    "kind": "structured",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://store.creality.com/products/k2-pro-combo-3d-printer",
+    "discovery": "homepage-scrape",
+    "price": 599.0,
+    "currency": "USD",
+    "in_stock": true,
+    "method": "http:json-ld",
+    "title": "K2 Pro/ Combo 3D Printer",
+    "error": null,
+    "searchable": true,
+    "seconds": 8.9
+  },
+  {
+    "key": "qidi",
+    "label": "QIDI Tech",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://qidi3d.com/products/max4-cutter-blade-5",
+    "discovery": "products.json",
+    "price": 4.99,
+    "currency": "USD",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "MAX4 Cutter Blade*5",
+    "error": null,
+    "searchable": true,
+    "seconds": 5.7
+  },
+  {
+    "key": "sovol",
+    "label": "Sovol 3D",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://sovol3d.com/products/sovol-m1d-3d-printer",
+    "discovery": "products.json",
+    "price": 1499.0,
+    "currency": "USD",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "Pre-Order Sovol M1D 3D Printer",
+    "error": null,
+    "searchable": true,
+    "seconds": 4.9
+  },
+  {
+    "key": "matterhackers",
+    "label": "MatterHackers",
+    "kind": "browser",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://www.matterhackers.com/store/l/original-prusa-xl-3d-printer/sk/MFZU9M98",
+    "discovery": "homepage-scrape",
+    "price": 5799.0,
+    "currency": "USD",
+    "in_stock": true,
+    "method": "browser:json-ld",
+    "title": "Original Prusa XL 3D Printer",
+    "error": null,
+    "searchable": false,
+    "seconds": 6.7
+  },
+  {
+    "key": "printedsolid",
+    "label": "Printed Solid",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://printedsolid.com/products/prusament-pla-blend-viva-la-bronze-1kg-nfc",
+    "discovery": "products.json",
+    "price": 37.99,
+    "currency": "USD",
+    "in_stock": false,
+    "method": "shopify-json",
+    "title": "Prusament PLA Blend Viva La Bronze 1kg (NFC)",
+    "error": null,
+    "searchable": true,
+    "seconds": 5.1
+  },
+  {
+    "key": "e3d",
+    "label": "E3D Online",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://e3d-online.com/products/genuine-e3d-obxidian-prusa-nozzles-for-mk4-xl",
+    "discovery": "products.json",
+    "price": 41.5,
+    "currency": "GBP",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "ObXidian\u00ae Prusa Nextruder Nozzles",
+    "error": null,
+    "searchable": true,
+    "seconds": 5.5
+  },
+  {
+    "key": "slice",
+    "label": "Slice Engineering",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://sliceengineering.com/products/mako-for-bambu-lab-old",
+    "discovery": "products.json",
+    "price": 134.99,
+    "currency": "USD",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "Mako\u00ae Hotend for Bambu Lab",
+    "error": null,
+    "searchable": true,
+    "seconds": 5.8
+  },
+  {
+    "key": "microswiss",
+    "label": "Micro Swiss",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://store.micro-swiss.com/products/flowtech-heatsink-for-creality-ender-5-max",
+    "discovery": "products.json",
+    "price": 24.0,
+    "currency": "CAD",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "FlowTech\u2122 Heatsink for Creality Ender 5 Max",
+    "error": null,
+    "searchable": true,
+    "seconds": 5.3
+  },
+  {
+    "key": "west3d",
+    "label": "West3D",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://west3d.com/products/mean-well-hdr-30-24-24v-power-supply-psu",
+    "discovery": "products.json",
+    "price": 23.0,
+    "currency": "CAD",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "Mean Well HDR-30-24 24V Power Supply (PSU)",
+    "error": null,
+    "searchable": true,
+    "seconds": 5.7
+  },
+  {
+    "key": "fabreeko",
+    "label": "Fabreeko",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://fabreeko.com/products/bambu-pla-sparkle",
+    "discovery": "products.json",
+    "price": 35.47,
+    "currency": "CAD",
+    "in_stock": false,
+    "method": "shopify-json",
+    "title": "Bambu Pla Sparkle",
+    "error": null,
+    "searchable": true,
+    "seconds": 5.4
+  },
+  {
+    "key": "kb3d",
+    "label": "KB-3D",
+    "kind": "structured",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "NO-URL",
+    "url": null,
+    "discovery": "not-found",
+    "price": null,
+    "currency": null,
+    "in_stock": null,
+    "method": null,
+    "title": null,
+    "error": null,
+    "searchable": false,
+    "seconds": 4.8
+  },
+  {
+    "key": "filastruder",
+    "label": "Filastruder",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://filastruder.com/products/clearance-biqu-panda-touch-5-screen-for-bambu-lab-3d-printers",
+    "discovery": "products.json",
+    "price": 39.99,
+    "currency": "USD",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "Clearance - BIQU Panda Touch 5\" Screen for Bambu Lab 3D Printers",
+    "error": null,
+    "searchable": true,
+    "seconds": 6.1
+  },
+  {
+    "key": "gulfcoast",
+    "label": "Gulf Coast Robotics",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "TIMEOUT",
+    "url": null,
+    "discovery": "timeout",
+    "seconds": 50.0
+  },
+  {
+    "key": "th3d",
+    "label": "TH3D Studio",
+    "kind": "browser",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://www.th3dstudio.com/product/th3d-zsense8-high-accuracy-solid-state-abl-probe-works-with-marlin-klipper/",
+    "discovery": "homepage-scrape",
+    "price": 27.99,
+    "currency": "USD",
+    "in_stock": true,
+    "method": "browser:json-ld",
+    "title": "TH3D ZSense8 High-Accuracy Solid State ABL Probe - Compatible with ANY",
+    "error": null,
+    "searchable": false,
+    "seconds": 7.9
+  },
+  {
+    "key": "ldo",
+    "label": "LDO Motors",
+    "kind": "structured",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "FAIL",
+    "url": "https://ldomotors.com/products/browse/linear-motor",
+    "discovery": "homepage-scrape",
+    "price": null,
+    "currency": "USD",
+    "in_stock": null,
+    "method": "browser:failed",
+    "title": "",
+    "error": "no price in page",
+    "searchable": false,
+    "seconds": 12.7
+  },
+  {
+    "key": "siboor",
+    "label": "Siboor",
+    "kind": "browser",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "BLOCKED",
+    "url": null,
+    "discovery": "blocked",
+    "price": null,
+    "currency": null,
+    "in_stock": null,
+    "method": null,
+    "title": null,
+    "error": null,
+    "searchable": false,
+    "seconds": 8.8
+  },
+  {
+    "key": "3djake",
+    "label": "3DJake",
+    "kind": "selector",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://www.3djake.com/3djake/ecopla",
+    "discovery": "catalog-seed",
+    "price": 31.66,
+    "currency": "EUR",
+    "in_stock": null,
+    "method": "http:selector",
+    "title": "3DJAKE ecoPLA Filaments",
+    "error": null,
+    "searchable": false,
+    "seconds": 0.7
+  },
+  {
+    "key": "voxelfactory",
+    "label": "Voxel Factory",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://voxelfactory.com/products/polymaker-pla-pro-1-75mm-1kg",
+    "discovery": "products.json",
+    "price": 23.99,
+    "currency": "CAD",
+    "in_stock": false,
+    "method": "shopify-json",
+    "title": "Polymaker PLA Pro 1.75mm 1kg",
+    "error": null,
+    "searchable": true,
+    "seconds": 5.6
+  },
+  {
+    "key": "3dprintingcanada",
+    "label": "3D Printing Canada",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://3dprintingcanada.com/products/aon3d-hylo\u2122",
+    "discovery": "products.json",
+    "price": 156000.0,
+    "currency": "CAD",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "Aon3D Hylo\u2122 Industrial 3D Printer",
+    "error": null,
+    "searchable": true,
+    "seconds": 5.7
+  },
+  {
+    "key": "filamentsca",
+    "label": "Filaments.ca",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://filaments.ca/products/econofil-basic-pla-pastel-green",
+    "discovery": "products.json",
+    "price": 12.99,
+    "currency": "CAD",
+    "in_stock": false,
+    "method": "shopify-json",
+    "title": "EconoFil\u2122 Standard PLA Filament - Pastel Green - 1.75mm - 1 KG",
+    "error": null,
+    "searchable": true,
+    "seconds": 5.5
+  },
+  {
+    "key": "digitmakers",
+    "label": "DigitMakers",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://digitmakers.ca/products/prusa-digital-calipers-kinex-150mm",
+    "discovery": "products.json",
+    "price": 91.99,
+    "currency": "CAD",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "Prusa Digital Calipers Kinex 150mm",
+    "error": null,
+    "searchable": true,
+    "seconds": 5.7
+  },
+  {
+    "key": "shop3d",
+    "label": "Shop3D.ca",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://shop3d.ca/products/bambu-lab-cooling-fan-for-hotend-h2d-h2s-p2-x2-h2",
+    "discovery": "products.json",
+    "price": 15.99,
+    "currency": "CAD",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "Bambu Lab - Cooling Fan for Hotend (H2D, H2S, P2, X2)",
+    "error": null,
+    "searchable": true,
+    "seconds": 6.2
+  },
+  {
+    "key": "spool3d",
+    "label": "Spool3D",
+    "kind": "structured",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://spool3d.ca/bambu-lab-ams-lite-top-mount-screws-kit/",
+    "discovery": "catalog-seed",
+    "price": 3.0,
+    "currency": "CAD",
+    "in_stock": true,
+    "method": "http:json-ld",
+    "title": "Bambu Lab AMS lite Top Mount Screws Kit",
+    "error": null,
+    "searchable": false,
+    "seconds": 0.6
+  },
+  {
+    "key": "polymaker",
+    "label": "Polymaker",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://shop.polymaker.com/products/polymaker-petg-black-and-white-4-pack-bundle",
+    "discovery": "products.json",
+    "price": 62.97,
+    "currency": "USD",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "Polymaker\u2122 PETG Black and White 4 Pack Bundle",
+    "error": null,
+    "searchable": true,
+    "seconds": 6.3
+  },
+  {
+    "key": "protopasta",
+    "label": "Proto-pasta",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://proto-pasta.com/products/fluorescent-purple-htpla",
+    "discovery": "products.json",
+    "price": 5.0,
+    "currency": "USD",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "Fluorescent Purple HTPLA",
+    "error": null,
+    "searchable": true,
+    "seconds": 5.9
+  },
+  {
+    "key": "atomic",
+    "label": "Atomic Filament",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://atomicfilament.com/products/translucent-neon-yellow-uv-reactive-pctg-pro-ams-compatible",
+    "discovery": "products.json",
+    "price": 34.49,
+    "currency": "USD",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "Translucent Neon Yellow UV Reactive PCTG PRO AMS Compatible",
+    "error": null,
+    "searchable": true,
+    "seconds": 5.8
+  },
+  {
+    "key": "overture",
+    "label": "Overture",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://overture3d.com/products/overture-matte-tpu-3d-printer-filament-1-75mm",
+    "discovery": "products.json",
+    "price": 26.99,
+    "currency": "USD",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "Overture Matte TPU 3D Printer Filament 1.75mm",
+    "error": null,
+    "searchable": true,
+    "seconds": 5.0
+  },
+  {
+    "key": "fillamentum",
+    "label": "Fillamentum",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://shop.fillamentum.com/products/petg-hffr",
+    "discovery": "products.json",
+    "price": 46.5,
+    "currency": "EUR",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "PETG HFFR | 750 g | 1.75",
+    "error": null,
+    "searchable": true,
+    "seconds": 5.6
+  },
+  {
+    "key": "sunlu",
+    "label": "SUNLU",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "NO-URL",
+    "url": null,
+    "discovery": "not-found",
+    "price": null,
+    "currency": null,
+    "in_stock": null,
+    "method": null,
+    "title": null,
+    "error": null,
+    "searchable": true,
+    "seconds": 27.0
+  },
+  {
+    "key": "digikey",
+    "label": "DigiKey",
+    "kind": "structured",
+    "tags": [
+      "components"
+    ],
+    "status": "BLOCKED",
+    "url": "https://www.digikey.com/en/products/detail/analog-devices-inc/TMC2209-LA-T/9764111",
+    "discovery": "catalog-seed",
+    "price": null,
+    "currency": "USD",
+    "in_stock": null,
+    "method": "blocked",
+    "title": "",
+    "error": "digikey.com is known to block automated fetches \u2014 set PW_HTTP_PROXY (residential) or a store API key",
+    "searchable": false,
+    "seconds": 0.1
+  },
+  {
+    "key": "mouser",
+    "label": "Mouser",
+    "kind": "browser",
+    "tags": [
+      "components"
+    ],
+    "status": "FAIL",
+    "url": "https://www.mouser.com/ProductDetail/Analog-Devices/TMC2209-LA-T",
+    "discovery": "catalog-seed",
+    "price": null,
+    "currency": "USD",
+    "in_stock": null,
+    "method": "http:failed",
+    "title": "",
+    "error": "no price in page",
+    "searchable": false,
+    "seconds": 2.4
+  }
+]

@@ -31,6 +31,16 @@ _API_ADAPTERS: dict[str, type[StoreAdapter]] = {
 
 # Stores that render prices into the DOM without publishing schema.org data.
 SELECTOR_RULES: dict[str, dict] = {
+    "target": {
+        "price_xpaths": ("//*[@data-test='product-price']",),
+        "title_xpaths": ("//h1[@data-test='product-title']", "(//h1)[1]"),
+        "force_browser": True,
+        "wait_for": "[data-test='product-price']",
+    },
+    "memoryexpress": {
+        "price_xpaths": ("//div[contains(@class,'c-capr-pricing__grand-total')]",),
+        "title_xpaths": ("(//h1)[1]",),
+    },
     "3djake": {
         "price_xpaths": (
             "//*[contains(@class,'product-price')]",
@@ -76,7 +86,7 @@ def _build(entry: dict) -> StoreAdapter:
         return WooAdapter(name=key, domains=domains)
     if kind == "selector":
         rules = SELECTOR_RULES[key]
-        return SelectorAdapter(name=key, domains=domains, **rules)
+        return SelectorAdapter(name=key, domains=domains, currency=_billing_currency(entry), **rules)
     currency = _billing_currency(entry)
     if entry.get("shopify_markets"):
         # A structured primary whose regional markets run on Shopify.
@@ -88,6 +98,9 @@ def _build(entry: dict) -> StoreAdapter:
 
 
 ADAPTERS: dict[str, StoreAdapter] = {entry["key"]: _build(entry) for entry in CATALOG}
+for _entry in CATALOG:
+    if _entry.get("trackable") is False:
+        ADAPTERS[_entry["key"]].trackable = False
 
 
 def store_key_for_url(url: str) -> str | None:
@@ -117,11 +130,21 @@ async def resolve(url: str) -> StoreAdapter:
 
 async def fetch_offer(url: str) -> StoreResult:
     adapter = await resolve(url)
+    if not adapter.trackable and adapter.name == "ldo":
+        return StoreResult(store=adapter.name, url=url, method="unsupported",
+                           error="LDO is a manufacturer catalog without retail prices; search its resellers KB-3D, West3D or Fabreeko")
     try:
-        return await adapter.fetch_offer(url)
+        result = await adapter.fetch_offer(url)
     except Exception as exc:                     # an adapter bug must not kill a sweep
         log.exception("adapter %s failed on %s", adapter.name, url)
-        return StoreResult(store=adapter.name, url=url, error=f"{type(exc).__name__}: {exc}")
+        result = StoreResult(store=adapter.name, url=url, error=f"{type(exc).__name__}: {exc}")
+    if not result.ok and not any(reason in result.method for reason in ("not-found", "unavailable")):
+        from .retail_api import fallback
+        alternate = await fallback(url)
+        if alternate is not None:
+            alternate.extra["direct_fetch_error"] = result.error
+            result = alternate
+    return result
 
 
 async def search_stores(query: str, store_keys: list[str] | None = None,

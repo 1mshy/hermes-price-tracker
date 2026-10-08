@@ -312,7 +312,7 @@ def test_keepa_asks_the_marketplace_the_link_points_at(monkeypatch):
 
     async def get_json(url, **kwargs):
         seen["url"] = url
-        return {"products": [{"title": "SUNLU AMS Heater", "stats": {"current": [16773, -1]}}]}
+        return {"products": [{"title": "SUNLU AMS Heater", "asin": "B0FQVHHBQV", "domainId": 6, "productType": 0, "lastUpdate": int(apis.time.time() / 60) - 21564000, "stats": {"current": [16773, -1]}}]}
 
     monkeypatch.setattr(apis.fetcher, "get_json", get_json)
     monkeypatch.setattr(apis.settings, "keepa_api_key", "test-key")

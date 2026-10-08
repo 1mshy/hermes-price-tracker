@@ -32,6 +32,16 @@ class TrackQueryIn(BaseModel):
     cooldown_hours: int = 12
 
 
+class AddWatchIn(BaseModel):
+    input: str = Field(min_length=1, max_length=1000)
+    target_price: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    drop_pct: float | None = Field(default=None, gt=0, lt=100, allow_inf_nan=False)
+    alert_on_restock: bool = False
+    stores: list[str] | None = None
+    channels: str = ""
+    cooldown_hours: int = Field(default=12, ge=1)
+
+
 class CompareIn(BaseModel):
     query: str
     stores: list[str] | None = None
@@ -59,11 +69,11 @@ class CarSearchIn(BaseModel):
 
 
 class TrackerPatch(BaseModel):
-    target_price: float | None = None
-    drop_pct: float | None = None
+    target_price: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    drop_pct: float | None = Field(default=None, gt=0, lt=100, allow_inf_nan=False)
     alert_on_restock: bool | None = None
     channels: str | None = None
-    cooldown_hours: int | None = None
+    cooldown_hours: int | None = Field(default=None, ge=1)
     active: bool | None = None
     label: str | None = None
     reset_baseline: bool = False
@@ -71,7 +81,9 @@ class TrackerPatch(BaseModel):
 
 @router.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "channels": channel_status()}
+    # `sweep` carries last_sweep_at / next_sweep_at so the host wake hook and
+    # the watchdog can tell a stalled scheduler from one that just resumed.
+    return {"status": "ok", "channels": channel_status(), "sweep": sweep_scheduler.current()}
 
 
 @router.get("/stores")
@@ -93,6 +105,14 @@ async def compare(body: CompareIn) -> dict:
 @router.get("/trackers")
 async def trackers() -> dict:
     return {"trackers": await service.list_tracked()}
+
+
+@router.post("/trackers")
+async def add_watch(body: AddWatchIn) -> dict:
+    result = await service.add_watch(**body.model_dump())
+    if not result.get("ok"):
+        raise HTTPException(status_code=422, detail=result)
+    return result
 
 
 @router.post("/trackers/url")
@@ -119,7 +139,7 @@ async def track_query(body: TrackQueryIn) -> dict:
 
 @router.patch("/trackers/{tracker_id}")
 async def patch_tracker(tracker_id: int, body: TrackerPatch) -> dict:
-    result = await service.set_tracker(tracker_id, **body.model_dump())
+    result = await service.set_tracker(tracker_id, **body.model_dump(exclude_unset=True))
     if not result.get("ok"):
         raise HTTPException(status_code=404, detail=result)
     return result

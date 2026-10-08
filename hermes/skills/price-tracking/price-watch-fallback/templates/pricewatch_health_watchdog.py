@@ -1,62 +1,37 @@
 #!/usr/bin/env python3
-"""Silent health watchdog (no_agent cron job) that pushes its own report.
+"""Recover missed shopping work; notify once only when a problem persists.
 
-Prints ONLY when something is wrong; empty stdout = healthy = no message (the
-watchdog pattern). Checks, in the order they fail most quietly:
-
-1. the price engine answers /api/health;
-2. sweeps are actually happening (the newest `last_checked` is recent);
-3. no tracked listing has failed MAX_CONSECUTIVE_ERRORS sweeps in a row;
-4. the LLM endpoint the agent runs on answers /models — when it is down every
-   agent cron job (Reddit sweeps, the morning brief) fails and nothing else
-   says so: the community sweep failed eight runs in a row over 2026-09-03/05
-   while a $49.99 coupon on a watched product came and went;
-5. no cron job has a failure streak of FAILURE_STREAK or more.
-
-A no_agent job's stdout goes only where its `deliver` target points, and
-`local` is a file inside the container. So on trouble this script also pushes
-the report itself: through the engine's POST /api/notify (the same channels
-the price alerts use) when the engine is up, straight to ntfy when the engine
-is what is down. An unchanged report is not re-pushed for REPEAT_HOURS.
-
-Install: copy to $HERMES_HOME/scripts/, then
-    cronjob action=create no_agent=true script=pricewatch_health_watchdog.py schedule='0 */6 * * *'
+A no_agent cron job, independent of the LLM. Diagnostics stay in
+$HERMES_HOME/cron/health_watchdog_status.json. There is never stdout to deliver
+as a second notification. A confirmed incident is pushed once, after two
+observations, and can alert again only after it has actually recovered.
 """
 import datetime as dt
+import fcntl
 import json
 import os
-import sys
+import socket
+import time
+import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 
-BASE = os.environ.get("PRICEWATCH_BASE", "http://pricewatch:8000")
+BASE = os.environ.get("PRICEWATCH_BASE", "http://pricewatch:8000").rstrip("/")
 HERMES_HOME = os.environ.get("HERMES_HOME", "/opt/data")
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "").rstrip("/")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
-# In the agent container NTFY_TOPIC may be the agent's *inbound* topic; the
-# alerts topic the user's phone subscribes to is NTFY_PUBLISH_TOPIC.
 NTFY_TOPIC = os.environ.get("NTFY_PUBLISH_TOPIC") or os.environ.get("NTFY_TOPIC", "")
 NTFY_SERVER = (os.environ.get("NTFY_SERVER") or os.environ.get("NTFY_SERVER_URL")
                or "https://ntfy.sh").rstrip("/")
-
 MAX_CONSECUTIVE_ERRORS = 3
-FAILURE_STREAK = 2
-STALE_SWEEP_HOURS = 3
-REPEAT_HOURS = 24
+FAILURE_STREAK = 3
+PERSISTENT_RUNS = 2
+SWEEP_GRACE_MINUTES = 15
+NETWORK_PROBE_DELAYS = (0, 3, 5, 10, 20, 30)
+RETRY_DELAYS = (2, 5, 15)
 STATE_PATH = os.path.join(HERMES_HOME, "cron", "health_watchdog_state.json")
-TITLE = "Hermes Shopping watchdog"
-
-
-def get_json(url, timeout=20, headers=None):
-    req = urllib.request.Request(url, headers=headers or {})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.load(resp)
-
-
-def post_json(url, payload, timeout=20):
-    req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST",
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.status
+STATUS_PATH = os.path.join(HERMES_HOME, "cron", "health_watchdog_status.json")
+TITLE = "Shopping watch needs attention"
 
 
 def utcnow():
@@ -68,112 +43,263 @@ def as_utc(value):
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
 
 
-problems = []
-engine_up = True
-
-# 1. engine
-try:
-    health = get_json(f"{BASE}/api/health", timeout=15)
-    if health.get("status") != "ok":
-        problems.append(f"engine health check returned {health}")
-except Exception as exc:                               # noqa: BLE001
-    engine_up = False
-    problems.append(f"price engine unreachable ({exc}) — tracked prices are NOT being checked")
-
-# 2 + 3. sweeps and listings
-if engine_up:
+def read_json(path):
     try:
-        trackers = get_json(f"{BASE}/api/trackers", timeout=30)["trackers"]
-    except Exception as exc:                           # noqa: BLE001
-        trackers = []
-        problems.append(f"could not list trackers ({exc})")
-    newest = None
+        with open(path, encoding="utf-8") as fh:
+            value = json.load(fh)
+            return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_json(path, value):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temporary = path + ".tmp"
+    with open(temporary, "w", encoding="utf-8") as fh:
+        json.dump(value, fh, indent=2)
+    os.replace(temporary, path)
+
+
+def transient(exc):
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (429, 500, 502, 503, 504)
+    return isinstance(exc, (urllib.error.URLError, OSError, socket.timeout))
+
+
+def wait_for_network(hosts):
+    pending = {host for host in hosts if host}
+    for delay in NETWORK_PROBE_DELAYS:
+        if delay:
+            time.sleep(delay)
+        for host in list(pending):
+            try:
+                socket.getaddrinfo(host, 443)
+                pending.remove(host)
+            except OSError:
+                pass
+        if not pending:
+            return True
+    return False
+
+
+def request_json(url, payload=None, timeout=20, headers=None, method=None):
+    request_headers = dict(headers or {})
+    data = None
+    if payload is not None:
+        data = json.dumps(payload).encode()
+        request_headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, method=method, headers=request_headers)
+    for attempt in range(len(RETRY_DELAYS) + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read()
+            return json.loads(body) if body else {}
+        except Exception as exc:
+            if attempt < len(RETRY_DELAYS) and transient(exc):
+                time.sleep(RETRY_DELAYS[attempt])
+                continue
+            raise
+
+
+def get_json(url, timeout=20, headers=None):
+    return request_json(url, timeout=timeout, headers=headers)
+
+
+def post_json(url, payload, timeout=20):
+    return request_json(url, payload, timeout=timeout, method="POST")
+
+
+def overdue(sweep, state, now):
+    """Respect the user's cadence, even daily/weekly watches.
+
+    Remember the next run we actually observed rather than assuming that a
+    listing older than three hours proves a broken scheduler.
+    """
+    expected = state.get("expected_sweep_at")
+    if not expected or sweep.get("sweep_running"):
+        return False
+    try:
+        due = as_utc(expected)
+        last = sweep.get("last_sweep_at")
+        return (now > due + dt.timedelta(minutes=SWEEP_GRACE_MINUTES)
+                and (not last or as_utc(last) < due))
+    except (TypeError, ValueError):
+        return False
+
+
+def recover_schedule(health, state, diagnostics):
+    sweep = health.get("sweep") or {}
+    if sweep.get("sweep_running"):
+        return health
+    disarmed = "next_sweep_at" in sweep and not sweep.get("next_sweep_at")
+    stalled = overdue(sweep, state, utcnow())
+    if not disarmed and not stalled:
+        return health
+    try:
+        # Restore the existing cadence; never replace a user's schedule.
+        if disarmed and sweep.get("cron"):
+            request_json(f"{BASE}/api/schedule", {"cron": sweep["cron"]}, method="PATCH")
+            diagnostics.append("Restored the existing sweep schedule.")
+        post_json(f"{BASE}/api/refresh", {}, timeout=120)
+        diagnostics.append("Requested a catch-up price check.")
+        return get_json(f"{BASE}/api/health", timeout=15)
+    except Exception as exc:
+        diagnostics.append(f"Catch-up could not finish: {str(exc)[:160]}")
+        return health
+
+
+def coverage_problems(trackers, diagnostics):
+    problems = {}
     for tracker in trackers:
         if not tracker.get("active"):
             continue
-        for offer in tracker.get("offers", []):
-            checked = offer.get("last_checked")
-            if checked:
-                when = as_utc(checked)
-                newest = when if newest is None or when > newest else newest
-            errors = offer.get("consecutive_errors") or 0
-            if errors >= MAX_CONSECUTIVE_ERRORS:
-                problems.append(
-                    f"'{tracker.get('label', '?')}' at {offer.get('store')} has failed "
-                    f"{errors} sweeps in a row ({str(offer.get('error'))[:80]}) — "
-                    f"{offer.get('url')}")
-    if newest is not None and utcnow() - newest > dt.timedelta(hours=STALE_SWEEP_HOURS):
-        problems.append(f"no listing has been checked since {newest:%Y-%m-%d %H:%M} UTC — "
-                        f"the sweep scheduler looks stalled")
+        currency = (tracker.get("currency") or "").upper()
+        offers = [offer for offer in tracker.get("offers", [])
+                  if not currency or (offer.get("currency") or "").upper() == currency]
+        failed = [offer for offer in offers
+                  if (offer.get("consecutive_errors") or 0) >= MAX_CONSECUTIVE_ERRORS]
+        for offer in failed:
+            diagnostics.append(f"{tracker.get('label') or tracker.get('title')}: "
+                               f"{offer.get('store')}: {offer.get('error')}")
+        # One blocked alternate store is not a broken watch. Newly queued
+        # watches are retried by the engine and get no immediate error push.
+        if not offers or len(failed) == len(offers):
+            key = f"watch:{tracker['tracker_id']}"
+            label = tracker.get("label") or tracker.get("title") or "Saved product"
+            problems[key] = (f"{label}: no working listing in the watch's currency. "
+                             "Automatic retries continue; add another retailer link to restore coverage.")
+    return problems
 
-# 4. the model behind the agent
-if LLM_BASE_URL:
-    headers = {"Authorization": f"Bearer {LLM_API_KEY}"} if LLM_API_KEY else {}
+
+def collect_problems(state):
+    problems, diagnostics, observed = {}, [], {"engine:", "llm:", "cron:"}
+    health, engine_up = {}, False
     try:
-        get_json(f"{LLM_BASE_URL}/models", timeout=20, headers=headers)
-    except Exception as exc:                           # noqa: BLE001
-        problems.append(
-            f"LLM endpoint {LLM_BASE_URL} not answering ({str(exc)[:80]}) — every agent "
-            f"cron job (Reddit sweeps, morning brief) fails until it is back; tracker "
-            f"alerts are unaffected")
+        # A broken notification hostname must never prevent price checks.
+        wait_for_network([urlsplit(BASE).hostname])
+        health = get_json(f"{BASE}/api/health", timeout=15)
+        engine_up = True
+        health = recover_schedule(health, state, diagnostics)
+        if health.get("status") != "ok":
+            problems["engine:health"] = "Price checks are unavailable. The pricewatch service needs attention."
+        sweep = health.get("sweep") or {}
+        if "next_sweep_at" in sweep and not sweep.get("next_sweep_at"):
+            problems["engine:schedule"] = "Automatic price checks are not scheduled after a recovery attempt. Restart pricewatch."
+        elif overdue(sweep, state, utcnow()):
+            problems["engine:schedule"] = "Automatic price checks remain overdue after a catch-up attempt. Check the pricewatch service."
+        try:
+            trackers = get_json(f"{BASE}/api/trackers", timeout=30)["trackers"]
+            problems.update(coverage_problems(trackers, diagnostics))
+            observed.add("watch:")
+        except Exception as exc:
+            problems["engine:trackers"] = "Saved watches cannot be loaded. Check the pricewatch service."
+            diagnostics.append(f"Loading watches: {str(exc)[:160]}")
+    except Exception as exc:
+        problems["engine:health"] = "Automatic price checks cannot reach pricewatch. Check that the shopping services are running."
+        diagnostics.append(f"Price engine: {str(exc)[:160]}")
 
-# 5. cron jobs that keep failing
-try:
-    with open(os.path.join(HERMES_HOME, "cron", "jobs.json"), encoding="utf-8") as fh:
-        jobs = json.load(fh).get("jobs", [])
-except Exception:                                      # noqa: BLE001
-    jobs = []
-me = os.path.basename(__file__)
-for job in jobs:
-    if not job.get("enabled") or (job.get("script") or "") == me:
-        continue
-    streak = job.get("failure_streak") or 0
-    if streak >= FAILURE_STREAK:
-        problems.append(
-            f"cron job '{job.get('name')}' has failed {streak} runs in a row "
-            f"({str(job.get('last_error') or job.get('last_status'))[:80]})")
+    jobs = read_json(os.path.join(HERMES_HOME, "cron", "jobs.json")).get("jobs", [])
+    active = [job for job in jobs if job.get("enabled", True)
+              and os.path.basename(job.get("script") or "") != os.path.basename(__file__)]
+    model_down = False
+    if LLM_BASE_URL and any(not job.get("no_agent") for job in active):
+        headers = {"Authorization": f"Bearer {LLM_API_KEY}"} if LLM_API_KEY else {}
+        try:
+            get_json(f"{LLM_BASE_URL}/models", timeout=20, headers=headers)
+        except Exception as exc:
+            model_down = True
+            problems["llm:endpoint"] = ("Community deal research cannot reach the model server. "
+                                        "Start the configured model server; saved price watches continue independently.")
+            diagnostics.append(f"Model endpoint: {str(exc)[:160]}")
+    for job in active:
+        if (job.get("failure_streak") or 0) < FAILURE_STREAK:
+            continue
+        if model_down and not job.get("no_agent"):
+            continue  # The model outage explains these; send one incident.
+        key = f"cron:{job.get('id') or job.get('name')}"
+        problems[key] = (f"Scheduled research '{job.get('name')}' has repeatedly failed. "
+                         "Check its saved run details; price watches continue independently.")
+        diagnostics.append(f"{key}: {job.get('last_error') or job.get('last_status')}")
+    return problems, diagnostics, observed, health, engine_up
 
-if not problems:
-    sys.exit(0)
 
-report = "\n".join(f"- {p}" for p in problems)
+def incident_state(problems, previous, observed, now):
+    """Stable per-incident keys; recovery of one issue cannot resend another."""
+    old = previous.get("incidents") or {}
+    incidents = {key: value for key, value in old.items()
+                 if not any(key.startswith(prefix) for prefix in observed)}
+    due = {}
+    for key, message in problems.items():
+        incident = dict(old.get(key) or {})
+        incident.setdefault("first_seen_at", now.isoformat())
+        incident["runs"] = incident.get("runs", 0) + 1
+        incident["message"] = message
+        incidents[key] = incident
+        if incident["runs"] >= PERSISTENT_RUNS and not incident.get("delivered_at"):
+            due[key] = message
+    return incidents, due
 
-# Do not nag: the same report once a day is plenty.
-state = {}
-try:
-    with open(STATE_PATH, encoding="utf-8") as fh:
-        state = json.load(fh)
-except Exception:                                      # noqa: BLE001
-    pass
-if state.get("report") == report:
+
+def push_report(report, engine_up, diagnostics):
+    if engine_up:
+        try:
+            result = post_json(f"{BASE}/api/notify", {"title": TITLE, "message": report})
+            if result.get("delivered"):
+                return True
+            diagnostics.append(f"No engine channel delivered: {result.get('channels') or result.get('error')}")
+        except Exception as exc:
+            diagnostics.append(f"Engine notification: {str(exc)[:160]}")
+    if NTFY_TOPIC:
+        try:
+            # Only resolve ntfy when a message is actually due.
+            wait_for_network([urlsplit(NTFY_SERVER).hostname])
+            post_json(NTFY_SERVER, {"topic": NTFY_TOPIC, "title": TITLE,
+                                   "message": report, "priority": 3, "tags": ["warning"]})
+            return True
+        except Exception as exc:
+            diagnostics.append(f"Notification retry: {str(exc)[:160]}")
+    return False
+
+
+def run():
+    state = read_json(STATE_PATH)
+    now = utcnow()
+    problems, diagnostics, observed, health, engine_up = collect_problems(state)
+    incidents, due = incident_state(problems, state, observed, now)
+    sweep = health.get("sweep") or {}
+    next_state = {"incidents": incidents, "checked_at": now.isoformat(),
+                  "expected_sweep_at": (state.get("expected_sweep_at") if overdue(sweep, state, now)
+                                        else sweep.get("next_sweep_at") or state.get("expected_sweep_at"))}
+    # Prove state is writable before sending, so a permissions problem cannot
+    # turn into the same notification on every run.
+    save_json(STATE_PATH, next_state)
+    if due and push_report("\n".join(f"- {message}" for message in due.values()), engine_up, diagnostics):
+        for key in due:
+            incidents[key]["delivered_at"] = now.isoformat()
+        save_json(STATE_PATH, next_state)
+    save_json(STATUS_PATH, {"checked_at": now.isoformat(), "problems": problems,
+                           "actions_and_details": diagnostics})
+    return 0
+
+
+def main():
     try:
-        if utcnow() - as_utc(state["at"]) < dt.timedelta(hours=REPEAT_HOURS):
-            sys.exit(0)
-    except Exception:                                  # noqa: BLE001
-        pass
+        os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+        with open(STATE_PATH + ".lock", "w", encoding="utf-8") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return 0
+            return run()
+    except Exception as exc:
+        # A diagnostic failure must not become a cron failure push itself.
+        try:
+            save_json(STATUS_PATH, {"checked_at": utcnow().isoformat(),
+                                   "error": str(exc)[:300]})
+        except OSError:
+            pass
+        return 0
 
-pushed = "nowhere"
-if engine_up:
-    try:
-        post_json(f"{BASE}/api/notify", {"title": TITLE, "message": report})
-        pushed = "engine channels"
-    except Exception as exc:                           # noqa: BLE001
-        problems.append(f"(push via engine failed: {str(exc)[:60]})")
-if pushed == "nowhere" and NTFY_TOPIC:
-    try:
-        post_json(NTFY_SERVER, {"topic": NTFY_TOPIC, "title": TITLE, "message": report,
-                                "priority": 4, "tags": ["warning"]})
-        pushed = "ntfy directly"
-    except Exception as exc:                           # noqa: BLE001
-        problems.append(f"(push via ntfy failed: {str(exc)[:60]})")
 
-try:
-    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-    with open(STATE_PATH, "w", encoding="utf-8") as fh:
-        json.dump({"report": report, "at": utcnow().isoformat()}, fh)
-except Exception:                                      # noqa: BLE001
-    pass
-
-print(f"PRICEWATCH ALERT (pushed via {pushed}):")
-print("\n".join(f"- {p}" for p in problems))
-sys.exit(0)
+if __name__ == "__main__":
+    raise SystemExit(main())

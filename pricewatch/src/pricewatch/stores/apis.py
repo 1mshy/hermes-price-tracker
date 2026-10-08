@@ -6,6 +6,7 @@ sites unreliable. Each adapter degrades to `requires_key` when unconfigured.
 """
 from __future__ import annotations
 
+import datetime as dt
 import re
 import time
 from urllib.parse import quote
@@ -14,9 +15,9 @@ from lxml import html as lxml_html
 
 from ..extract import extract
 from ..fetch import fetcher
-from ..money import detect_currency, parse_price
+from ..money import currency_for_host, currency_from_text, detect_currency, parse_price
 from ..settings import settings
-from .base import StoreAdapter, StoreResult
+from .base import StoreAdapter, StoreResult, host_of
 
 _BESTBUY_FIELDS = "sku,name,salePrice,regularPrice,onlineAvailability,inStoreAvailability,url,manufacturer,modelNumber"
 
@@ -175,7 +176,7 @@ class EbayAdapter(StoreAdapter):
     """eBay Browse API (client-credentials OAuth)."""
 
     name = "ebay"
-    domains = ("ebay.com",)
+    domains = ("ebay.com", "ebay.ca", "ebay.co.uk", "ebay.de")
     requires_key = "EBAY_APP_ID + EBAY_CERT_ID"
     _token: tuple[str, float] | None = None
 
@@ -202,7 +203,10 @@ class EbayAdapter(StoreAdapter):
         return EbayAdapter._token[0]
 
     async def fetch_offer(self, url: str) -> StoreResult:
-        token = await self._access_token()
+        try:
+            token = await self._access_token()
+        except Exception:
+            token = None
         item_id = re.search(r"/itm/(?:[^/]+/)?(\d{9,15})", url)
         if not token:
             # Keyless fallback: item pages ship schema.org JSON-LD and read
@@ -213,9 +217,10 @@ class EbayAdapter(StoreAdapter):
             return StoreResult(store=self.name, url=url, error="no item id in eBay URL")
         endpoint = f"https://api.ebay.com/buy/browse/v1/item/v1|{item_id.group(1)}|0"
         try:
-            data = await fetcher.get_json(endpoint, headers={"Authorization": f"Bearer {token}"})
-        except Exception as exc:
-            return StoreResult(store=self.name, url=url, error=f"ebay api: {exc}")
+            data = await fetcher.get_json(endpoint, headers={"Authorization": f"Bearer {token}",
+                                         "X-EBAY-C-MARKETPLACE-ID": self._marketplace(host_of(url))})
+        except Exception:
+            return await self._fetch_keyless(url, item_id.group(1))
         price = (data.get("price") or {})
         return StoreResult(store=self.name, url=data.get("itemWebUrl") or url,
                            title=data.get("title"), price=parse_price(price.get("value")),
@@ -225,35 +230,32 @@ class EbayAdapter(StoreAdapter):
                            sku=data.get("legacyItemId"), method="ebay-api")
 
     async def _fetch_keyless(self, url: str, item_id: str | None) -> StoreResult:
-        try:
-            page = await fetcher.get(url)
-        except Exception as exc:                       # noqa: BLE001 — network
-            return StoreResult(store=self.name, url=url, error=f"fetch failed: {exc}")
-        if page.status != 200 or page.looks_blocked:
-            return StoreResult(
-                store=self.name, url=url, method="needs-key",
-                error=(f"eBay page unavailable keylessly (HTTP {page.status}) — "
-                       "set EBAY_APP_ID/EBAY_CERT_ID for the reliable API path"))
-        found = extract(page.text)
-        if not found.ok:
-            return StoreResult(store=self.name, url=page.url, method="http:failed",
-                               error="no structured price on eBay page "
-                                     "(possibly an ended or variant listing)")
-        return StoreResult(store=self.name, url=page.url, title=found.title,
-                           price=found.price, currency=found.currency or "USD",
-                           in_stock=found.in_stock, sku=item_id or found.sku,
-                           method=f"http:{found.method}")
+        from .structured import StructuredAdapter
+        result = await StructuredAdapter(name=self.name, domains=self.domains,
+                                         wait_for=".x-price-primary, [itemprop='price']").fetch_offer(url)
+        result.sku = item_id or result.sku
+        if not result.ok and "not-found" not in result.method:
+            result.error = (result.error or "eBay page unavailable") + "; configure approved EBAY_APP_ID/EBAY_CERT_ID for Browse API access"
+        return result
+
+    @staticmethod
+    def _marketplace(host: str) -> str:
+        return {"ebay.ca": "EBAY_CA", "ebay.co.uk": "EBAY_GB", "ebay.de": "EBAY_DE"}.get(host, "EBAY_US")
 
     async def search(self, query: str, limit: int = 5) -> list[StoreResult]:
-        token = await self._access_token()
+        try:
+            token = await self._access_token()
+        except Exception:
+            token = None
         if not token:
             return await self._search_keyless(query, limit)
         endpoint = (f"https://api.ebay.com/buy/browse/v1/item_summary/search"
                     f"?q={quote(query)}&limit={limit}&filter=conditions:{{NEW}}")
         try:
-            data = await fetcher.get_json(endpoint, headers={"Authorization": f"Bearer {token}"})
+            data = await fetcher.get_json(endpoint, headers={"Authorization": f"Bearer {token}",
+                                         "X-EBAY-C-MARKETPLACE-ID": self._marketplace(self.storefront())})
         except Exception:
-            return []
+            return await self._search_keyless(query, limit)
         results = []
         for item in (data.get("itemSummaries") or [])[:limit]:
             price = item.get("price") or {}
@@ -267,18 +269,28 @@ class EbayAdapter(StoreAdapter):
 
     async def _search_keyless(self, query: str, limit: int) -> list[StoreResult]:
         """Buy-It-Now, new-condition search over the public results page."""
-        url = (f"https://www.ebay.com/sch/i.html?_nkw={quote(query)}"
+        host = self.storefront()
+        url = (f"https://www.{host}/sch/i.html?_nkw={quote(query)}"
                "&LH_BIN=1&LH_ItemCondition=1000")
         try:
-            page = await fetcher.get(url)
+            page = await fetcher.get_or_render(url, wait_for=".s-card, .s-item")
         except Exception:                              # noqa: BLE001 — network
             return []
         if page.status != 200 or page.looks_blocked:
             return []
-        return _parse_ebay_search(page.text, store=self.name, limit=limit)
+        results = _parse_ebay_search(page.text, store=self.name, limit=limit, host=host)
+        if not results and page.method == "http" and settings.pw_browser_enabled:
+            try:
+                page = await fetcher.render(url, wait_for=".s-card, .s-item")
+                if not page.looks_blocked and page.status == 200:
+                    results = _parse_ebay_search(page.text, store=self.name, limit=limit, host=host)
+            except Exception:
+                pass
+        return results
 
 
-def _parse_ebay_search(raw: str, store: str = "ebay", limit: int = 5) -> list[StoreResult]:
+def _parse_ebay_search(raw: str, store: str = "ebay", limit: int = 5,
+                       host: str = "ebay.com") -> list[StoreResult]:
     """Result cards from the keyless search page (s-card__*/su-card markup).
 
     Auction noise is pre-filtered by the LH_BIN query; placeholder "Shop on
@@ -291,7 +303,7 @@ def _parse_ebay_search(raw: str, store: str = "ebay", limit: int = 5) -> list[St
     results: list[StoreResult] = []
     seen: set[str] = set()
     for link in doc.xpath('//a[contains(@href, "/itm/")]'):
-        match = re.search(r"/itm/(\d{9,15})", link.get("href") or "")
+        match = re.search(r"/itm/(?:[^/]+/)?(\d{9,15})(?:[/?#]|$)", link.get("href") or "")
         if not match or match.group(1) in seen:
             continue
         # Climb to the smallest ancestor that actually contains both a title
@@ -315,9 +327,9 @@ def _parse_ebay_search(raw: str, store: str = "ebay", limit: int = 5) -> list[St
             continue
         seen.add(match.group(1))
         results.append(StoreResult(
-            store=store, url=f"https://www.ebay.com/itm/{match.group(1)}",
+            store=store, url=f"https://www.{host}/itm/{match.group(1)}",
             title=title, price=price,
-            currency=detect_currency(price_text, "USD"),
+            currency=currency_from_text(price_text, host, currency_for_host(host, "USD")),
             in_stock=True, sku=match.group(1), method="ebay-html",
             extra={"note": "keyless HTML search result — confirm with get_price "
                            "on the item URL before quoting as the final price"},
@@ -336,7 +348,7 @@ _KEEPA_MARKETS = {
 
 
 class KeepaAmazon:
-    """Amazon pricing via Keepa. Optional, paid, but the only dependable route."""
+    """Optional paid Amazon data; accept only fresh, matching product observations."""
 
     @staticmethod
     async def lookup(asin: str, host: str = "amazon.com") -> StoreResult | None:
@@ -354,7 +366,7 @@ class KeepaAmazon:
             host = "amazon.com"
         domain, currency = _KEEPA_MARKETS[host]
         endpoint = (f"https://api.keepa.com/product?key={key}&domain={domain}"
-                    f"&asin={asin}&stats=1&history=0")
+                    f"&asin={asin}&stats=1&history=0&update=0")
         try:
             data = await fetcher.get_json(endpoint)
         except Exception:
@@ -363,6 +375,17 @@ class KeepaAmazon:
         if not products:
             return None
         product = products[0]
+        if (product.get("asin") != asin or product.get("domainId") != domain
+                or product.get("productType") != 0):
+            return None
+        # Keepa Time is minutes since 2011-01-01. Old observations must not
+        # enter the live tracker as a newly discovered price drop.
+        updated = product.get("lastUpdate")
+        if not isinstance(updated, (int, float)):
+            return None
+        observed = (updated + 21564000) * 60
+        if not -60 <= time.time() - observed <= 3600:
+            return None
         stats = product.get("stats") or {}
         current = stats.get("current") or []
         # Keepa indices: 0 = Amazon, 1 = new 3rd-party. Values are cents, -1 = unavailable.
@@ -371,5 +394,8 @@ class KeepaAmazon:
             return None
         from decimal import Decimal
         return StoreResult(store="amazon", url=f"https://www.{host}/dp/{asin}",
-                           title=product.get("title"), price=Decimal(cents) / 100,
-                           currency=currency, in_stock=True, sku=asin, method="keepa-api")
+                           title=product.get("title"), price=Decimal(cents) / (1 if currency == "JPY" else 100),
+                           currency=currency, in_stock=None, sku=asin, method="keepa-api",
+                           extra={"observed_at": dt.datetime.fromtimestamp(observed, dt.timezone.utc).isoformat(),
+                                  "price_basis": "Amazon offer" if current[0] == cents else "lowest new marketplace offer",
+                                  "note": "Keepa observation; coupons and shipping are not included. Availability is unconfirmed."})

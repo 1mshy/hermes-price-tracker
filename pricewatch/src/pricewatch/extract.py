@@ -10,6 +10,7 @@ import json
 import re
 from dataclasses import dataclass
 from decimal import Decimal
+from urllib.parse import urlsplit
 
 from lxml import html as lxml_html
 
@@ -19,6 +20,7 @@ _JSONLD_XPATH = "//script[@type='application/ld+json']/text()"
 
 _IN_STOCK_WORDS = ("instock", "in_stock", "in stock", "backorder", "preorder", "limitedavailability")
 _OUT_WORDS = ("outofstock", "out_of_stock", "out of stock", "soldout", "sold out", "discontinued")
+_PRICE_RANGE = re.compile(r"\d[\d.,]*\s*(?:[-–—]|to)\s*[^\d]{0,6}\d", re.I)
 
 
 @dataclass
@@ -103,12 +105,51 @@ def _from_offer_node(offer: dict) -> tuple[Decimal | None, str | None, bool | No
     return price, (currency or None), _availability(offer.get("availability"))
 
 
-def from_jsonld(doc) -> Extracted:
+def from_jsonld(doc, url: str | None = None) -> Extracted:
     """Prefer the cheapest in-stock offer attached to a Product/ProductGroup."""
     best: tuple[Decimal, str | None, bool | None] | None = None
     title = sku = None
 
-    for node in _iter_jsonld(doc):
+    nodes = _iter_jsonld(doc)
+    products = [n for n in nodes if _types(n) & {"product", "productgroup"}]
+    # Recommendations are separate products, not cheaper offers of this item.
+    # Preserve ProductGroup variants, but only traverse the selected product's
+    # offers/hasVariant subtree once its identity has been established.
+    if products:
+        children = {id(v) for n in products for v in (n.get("hasVariant") or [])
+                    if isinstance(v, dict)}
+        roots = [n for n in products if id(n) not in children]
+        target = url or next(iter(doc.xpath("//link[@rel='canonical']/@href | "
+                                           "//meta[@property='og:url']/@content")), "")
+        def identity(value):
+            p = urlsplit(str(value or ""))
+            return p.netloc.removeprefix("www."), p.path.rstrip("/")
+        matched = [n for n in roots if target and any(
+            identity(candidate) == identity(target)
+            for candidate in (n.get("url"), n.get("@id"),
+                              (n.get("offers") or {}).get("url")
+                              if isinstance(n.get("offers"), dict) else None)
+            if candidate)]
+        if not matched and len(roots) > 1:
+            heading = " ".join(doc.xpath("(//h1)[1]//text()")).strip().casefold()
+            matched = [n for n in roots if heading and str(n.get("name", "")).strip().casefold() == heading]
+        selected = matched[0] if len(matched) == 1 else roots[0] if len(roots) == 1 else None
+        if selected is None:
+            return Extracted()
+        nodes = []
+        def collect(node, depth=0):
+            if depth > 12:
+                return
+            if isinstance(node, list):
+                for item in node:
+                    collect(item, depth + 1)
+            elif isinstance(node, dict):
+                nodes.append(node)
+                for key in ("offers", "hasVariant"):
+                    collect(node.get(key), depth + 1)
+        collect(selected)
+
+    for node in nodes:
         kinds = _types(node)
         if not (kinds & {"product", "productgroup", "offer", "aggregateoffer"}):
             continue
@@ -152,16 +193,20 @@ def from_jsonld(doc) -> Extracted:
 def from_microdata(doc) -> Extracted:
     nodes = doc.xpath("//*[@itemprop='price' or @itemprop='lowPrice']")
     for node in nodes:
-        price = parse_price(node.get("content") or node.text_content())
+        raw = node.get("content") or node.text_content()
+        if _PRICE_RANGE.search(raw):
+            return Extracted()  # configurator range, never the cheaper related item below it
+        price = parse_price(raw)
         if price is None:
             continue
-        cur_node = doc.xpath("//*[@itemprop='priceCurrency']/@content")
-        avail = doc.xpath("//*[@itemprop='availability']/@href | //*[@itemprop='availability']/@content")
-        title = doc.xpath("//*[@itemprop='name']/text()")
+        scope = next((p for p in node.iterancestors() if 'Offer' in (p.get('itemtype') or '')), doc)
+        cur_node = scope.xpath(".//*[@itemprop='priceCurrency']/@content")
+        avail = scope.xpath(".//*[@itemprop='availability']/@href | .//*[@itemprop='availability']/@content")
+        title = doc.xpath("(//h1)[1]//text()") or doc.xpath("//meta[@property='og:title']/@content")
         return Extracted(
             price=price,
             currency=(cur_node[0].upper() if cur_node else None),
-            title=title[0].strip() if title else None,
+            title=" ".join(t.strip() for t in title if t.strip()) if title else None,
             in_stock=_availability(avail[0] if avail else None),
             method="microdata",
         )
@@ -178,7 +223,10 @@ def from_meta(doc) -> Extracted:
                 return hit[0].strip()
         return None
 
-    price = parse_price(meta("product:price:amount", "og:price:amount", "twitter:data1", "price"))
+    raw = meta("product:price:amount", "og:price:amount", "twitter:data1", "price")
+    if raw and _PRICE_RANGE.search(raw):
+        return Extracted()
+    price = parse_price(raw)
     if price is None:
         return Extracted()
     currency = meta("product:price:currency", "og:price:currency")
@@ -204,8 +252,11 @@ def from_embedded_json(page_text: str) -> Extracted:
     prices = [p for p in (parse_price(m) for m in matches) if p is not None]
     if not prices:
         return Extracted()
-    # Multiple hits usually means list-price + sale-price + variants; take the mode-ish min.
-    return Extracted(price=min(prices), method="embedded-json")
+    # Unscoped blobs may include recommendations, installments and variants.
+    # Differing values are ambiguous; taking their minimum invents a discount.
+    if len(set(prices)) != 1:
+        return Extracted()
+    return Extracted(price=prices[0], method="embedded-json")
 
 
 # Amazon (and a few other CDNs) ship the buy-box price as a precise JSON pair
@@ -228,7 +279,8 @@ def from_price_amount(page_text: str) -> Extracted:
 
 
 def extract(page_text: str, *, default_currency: str = "USD",
-            host: str | None = None) -> Extracted:
+            host: str | None = None, url: str | None = None,
+            allow_heuristic: bool = True) -> Extracted:
     """`host` is the storefront the page came from: a bare `$` in the markup
     then means that host's dollar (newegg.ca → CAD) instead of USD."""
     try:
@@ -237,14 +289,14 @@ def extract(page_text: str, *, default_currency: str = "USD",
         return Extracted()
 
     for reader in (from_jsonld, from_microdata, from_meta):
-        found = reader(doc)
+        found = reader(doc, url=url) if reader is from_jsonld else reader(doc)
         if found.ok:
             found.currency = found.currency or currency_from_text(page_text[:4000], host, default_currency)
             if found.title:
                 found.title = re.sub(r"\s+", " ", found.title).strip()[:400]
             return found
 
-    for reader in (from_price_amount, from_embedded_json):
+    for reader in ((from_price_amount, from_embedded_json) if allow_heuristic else ()):
         found = reader(page_text)
         if found.ok:
             titles = doc.xpath("//title//text()") or doc.xpath("//h1//text()")

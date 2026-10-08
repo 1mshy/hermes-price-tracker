@@ -29,6 +29,13 @@ class Product(Base):
     # normalised token blob used for cross-store fuzzy matching
     match_key: Mapped[str] = mapped_column(String(500), default="", index=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Persist the user's request before contacting a retailer. Empty searches
+    # and temporary bot walls can then be retried after a process restart.
+    watch_input: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    watch_key: Mapped[str | None] = mapped_column(String(1100), nullable=True)
+    watch_stores: Mapped[str | None] = mapped_column(Text, nullable=True)
+    discovery_checked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    discovery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     offers: Mapped[list["Offer"]] = relationship(back_populates="product", cascade="all, delete-orphan")

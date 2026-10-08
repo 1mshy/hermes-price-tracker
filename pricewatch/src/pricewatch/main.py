@@ -4,8 +4,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from . import fx, preferences, scheduler, service
 from .api import router
@@ -47,7 +50,9 @@ async def lifespan(app: FastAPI):
         finally:
             if warmup is not None and not warmup.done():
                 warmup.cancel()
+                await asyncio.gather(warmup, return_exceptions=True)
             scheduler.stop()
+            await service.stop_full_sweep()
             await fetcher.aclose()
 
 
@@ -57,5 +62,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(router, prefix="/api")
+static_dir = Path(__file__).with_name("static")
+app.mount("/assets", StaticFiles(directory=static_dir), name="assets")
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/watchlist", include_in_schema=False)
+async def watchlist():
+    return FileResponse(static_dir / "watchlist.html", headers={"Cache-Control": "no-cache"})
+
+
 # Serves the Streamable-HTTP MCP endpoint at /mcp
 app.mount("/", mcp_app)

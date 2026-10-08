@@ -1,0 +1,97 @@
+[
+  {
+    "key": "target",
+    "label": "Target",
+    "kind": "browser",
+    "tags": [
+      "tech"
+    ],
+    "status": "FAIL",
+    "url": "https://www.target.com/p/-/A-85978609",
+    "discovery": "catalog-seed",
+    "price": null,
+    "currency": "USD",
+    "in_stock": null,
+    "method": "browser:failed",
+    "title": "",
+    "error": "no price in page",
+    "searchable": false,
+    "seconds": 3.3
+  },
+  {
+    "key": "memoryexpress",
+    "label": "Memory Express",
+    "kind": "selector",
+    "tags": [
+      "tech"
+    ],
+    "status": "OK",
+    "url": "https://www.memoryexpress.com/Products/MX00132891",
+    "discovery": "homepage-scrape",
+    "price": 1399.99,
+    "currency": "CAD",
+    "in_stock": null,
+    "method": "http:selector",
+    "title": "Gaming V16 V3607VU-DS73-CA w/ GeForce RTX 4050, Core\u2122 7 240H, 16GB, 51",
+    "error": null,
+    "searchable": false,
+    "seconds": 5.9
+  },
+  {
+    "key": "kb3d",
+    "label": "KB-3D",
+    "kind": "structured",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://kb-3d.com/store/stepper-motors-servos/11264-ldo-stepper-motor-nema-14-36sth20-1004ahig7t-1642876241077.html",
+    "discovery": "homepage-scrape",
+    "price": 20.99,
+    "currency": "USD",
+    "in_stock": true,
+    "method": "http:microdata",
+    "title": "LDO Stepper Motor - Nema 14 - 36STH20-1004AHIG(7T) LDO Stepper Motor -",
+    "error": null,
+    "searchable": false,
+    "seconds": 9.6
+  },
+  {
+    "key": "th3d",
+    "label": "TH3D Studio",
+    "kind": "browser",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://www.th3dstudio.com/product/th3d-zsense8-high-accuracy-solid-state-abl-probe-works-with-marlin-klipper/",
+    "discovery": "homepage-scrape",
+    "price": 27.99,
+    "currency": "USD",
+    "in_stock": true,
+    "method": "browser:json-ld",
+    "title": "TH3D ZSense8 High-Accuracy Solid State ABL Probe - Compatible with ANY",
+    "error": null,
+    "searchable": false,
+    "seconds": 9.0
+  },
+  {
+    "key": "sunlu",
+    "label": "SUNLU",
+    "kind": "shopify",
+    "tags": [
+      "3dprinting"
+    ],
+    "status": "OK",
+    "url": "https://store.sunlu.com/products/pre-order-filadc-i10-filament-dehumidifying-cabinet",
+    "discovery": "products.json",
+    "price": 249.99,
+    "currency": "CAD",
+    "in_stock": true,
+    "method": "shopify-json",
+    "title": "[Pre-order] FilaDC i10 Filament Dehumidifying Cabinet",
+    "error": null,
+    "searchable": true,
+    "seconds": 12.3
+  }
+]

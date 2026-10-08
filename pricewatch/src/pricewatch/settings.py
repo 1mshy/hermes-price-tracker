@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     pw_request_timeout: float = 25.0
     pw_per_host_rps: float = 0.4
     pw_browser_enabled: bool = True
+    pw_browser_concurrency: int = 2
+    pw_browser_context_limit: int = 8
+    # Dedicated anonymous storefront sessions; never the user's browser profile.
+    # Blank derives browser_sessions/ beside the DB; "off" disables persistence.
+    pw_browser_state_dir: str = ""
+    pw_blocked_retry_seconds: float = 300.0
+    pw_strategy_ttl_seconds: float = 86400.0
     pw_http_proxy: str = ""
     # TLS/HTTP2 fingerprint to present on the plain-HTTP path. Modern retail bot
     # walls (Cloudflare, Akamai, Amazon) fingerprint the ClientHello, not just
@@ -107,6 +114,8 @@ class Settings(BaseSettings):
     ebay_cert_id: str = ""
     keepa_api_key: str = ""
     serpapi_key: str = ""
+    # Explicit opt-in: each fallback uses provider credits, with caching disabled.
+    pw_retail_serpapi_enabled: bool = False
 
 
 settings = Settings()

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from ..fetch import fetcher
 from ..settings import settings
-from .base import Alert, Channel
+from .base import Alert, Channel, check_response
 
 
 class NtfyChannel(Channel):
@@ -36,5 +36,4 @@ class NtfyChannel(Channel):
             payload["click"] = alert.url
         client = await fetcher.client()
         response = await client.post(server, json=payload)
-        if response.status_code >= 300:
-            raise RuntimeError(f"ntfy {response.status_code}: {response.text[:200]}")
+        check_response(response, "ntfy")

@@ -472,3 +472,157 @@ def test_push_note_says_so_when_no_channel_is_configured(monkeypatch):
     out = asyncio.run(service.push_note("hello", "world"))
     assert out["ok"] is False and "no notification channel" in out["error"]
     assert asyncio.run(service.push_note("", "world"))["ok"] is False
+
+
+# ── coming back from a laptop sleep: nothing delivered = nothing consumed ──
+def _dispatch_returning(monkeypatch, outcome):
+    calls = []
+
+    async def dispatch(alert, only=None):
+        calls.append(alert)
+        return dict(outcome)
+    monkeypatch.setattr(service, "dispatch", dispatch)
+    return calls
+
+
+def _seed_hit(currency="CAD"):
+    """A watch whose target the seeded listing already beats."""
+    with session_scope() as session:
+        pid = _seed(session, [("west3d", "99", currency)])
+        tracker = _tracker(product_id=pid, currency=currency, target_price=Decimal("120"))
+        session.add(tracker)
+        session.flush()
+        return tracker.id
+
+
+def test_an_undelivered_alert_keeps_the_watch_armed_for_the_next_sweep(monkeypatch):
+    init_db()
+    calls = _dispatch_returning(monkeypatch, {"ntfy": "error: [Errno -5] No address associated"})
+    tid = _seed_hit()
+    first = [f for f in asyncio.run(service.evaluate_trackers()) if f["tracker_id"] == tid]
+    assert first and first[0]["channels"] == {"ntfy": "error: [Errno -5] No address associated"}
+    with session_scope() as session:
+        tracker = session.get(Tracker, tid)
+        assert tracker.last_notified_at is None          # cooldown not started
+        assert tracker.last_notified_price is None
+        events = session.query(AlertEvent).filter_by(tracker_id=tid).all()
+        assert len(events) == 1 and events[0].delivered is False   # but the attempt is on record
+
+    # the next sweep: still no channel → still armed, still recorded
+    second = [f for f in asyncio.run(service.evaluate_trackers()) if f["tracker_id"] == tid]
+    assert second and len(calls) == 2
+
+    # DNS is back: the push lands and only now does the cooldown start
+    _dispatch_returning(monkeypatch, {"ntfy": "sent"})
+    third = [f for f in asyncio.run(service.evaluate_trackers()) if f["tracker_id"] == tid]
+    assert third
+    with session_scope() as session:
+        tracker = session.get(Tracker, tid)
+        assert tracker.last_notified_at is not None
+        assert tracker.last_notified_price == Decimal("99")
+        assert [e.delivered for e in session.query(AlertEvent).filter_by(tracker_id=tid)
+                .order_by(AlertEvent.id)] == [False, False, True]
+    assert not [f for f in asyncio.run(service.evaluate_trackers()) if f["tracker_id"] == tid]
+
+
+def test_with_no_channel_configured_the_hit_is_recorded_once(monkeypatch):
+    init_db()
+    _dispatch_returning(monkeypatch, {})                 # nothing configured: {} from dispatch
+    tid = _seed_hit()
+    assert [f for f in asyncio.run(service.evaluate_trackers()) if f["tracker_id"] == tid]
+    assert not [f for f in asyncio.run(service.evaluate_trackers()) if f["tracker_id"] == tid]
+    with session_scope() as session:
+        assert session.get(Tracker, tid).last_notified_at is not None
+        assert session.query(AlertEvent).filter_by(tracker_id=tid).count() == 1
+
+
+def test_a_full_sweep_in_flight_is_joined_not_repeated(monkeypatch):
+    init_db()
+    _capture_dispatch(monkeypatch)
+    with session_scope() as session:
+        _seed(session, [("west3d", "119", "CAD"), ("spool3d", "121", "CAD")])
+    reads = []
+
+    async def fetch(url):
+        reads.append(url)
+        await asyncio.sleep(0.02)
+        return StoreResult(store="west3d", url=url, title="t", price=Decimal("118"),
+                           currency="CAD", in_stock=True, method="test")
+    monkeypatch.setattr(service, "fetch_offer", fetch)
+
+    async def two_at_once():
+        return await asyncio.gather(service.refresh_offers(), service.refresh_offers())
+    first, second = asyncio.run(two_at_once())
+    active = first["checked"]
+    assert active >= 2
+    assert second == first
+    assert len(reads) == active                        # each listing read once, not twice
+    assert service._full_sweep is None                 # nothing left dangling
+    assert service.last_full_sweep()["checked"] == active
+
+    # a targeted refresh is its own thing and never joins
+    reads.clear()
+    with session_scope() as session:
+        oid = session.query(Offer).filter_by(store="spool3d").first().id
+    asyncio.run(service.refresh_offers([oid]))
+    assert len(reads) == 1
+
+
+def test_disconnecting_first_caller_does_not_cancel_shared_sweep(monkeypatch):
+    async def exercise():
+        started, release = asyncio.Event(), asyncio.Event()
+        calls = []
+        async def refresh(ids):
+            calls.append(ids)
+            started.set()
+            await release.wait()
+            return {'checked': 1, 'updated': 1, 'failed': 0, 'alerts': []}
+        monkeypatch.setattr(service, '_refresh_offers', refresh)
+        first = asyncio.create_task(service.refresh_offers())
+        await started.wait()
+        first.cancel()
+        try:
+            await first
+        except asyncio.CancelledError:
+            pass
+        assert service._full_sweep is not None and not service._full_sweep.done()
+        second = asyncio.create_task(service.refresh_offers())
+        await asyncio.sleep(0)
+        release.set()
+        assert (await second)['updated'] == 1
+        assert calls == [None]
+        assert service._full_sweep is None
+    asyncio.run(exercise())
+
+
+def test_concurrent_evaluations_deliver_a_matching_watch_only_once(monkeypatch):
+    init_db()
+    tid = _seed_hit()
+    async def dispatch(alert, only=None):
+        await asyncio.sleep(0.01)
+        return {'ntfy': 'sent'}
+    monkeypatch.setattr(service, 'dispatch', dispatch)
+    async def exercise():
+        return await asyncio.gather(service.evaluate_trackers(), service.evaluate_trackers())
+    outcomes = asyncio.run(exercise())
+    assert sum(a['tracker_id'] == tid for batch in outcomes for a in batch) == 1
+
+
+def test_shutdown_cancels_shared_work_and_waits_for_cleanup(monkeypatch):
+    async def exercise():
+        entered, cleaned = asyncio.Event(), asyncio.Event()
+        async def refresh(ids):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                await asyncio.sleep(0)
+                cleaned.set()
+        monkeypatch.setattr(service, '_refresh_offers', refresh)
+        caller = asyncio.create_task(service.refresh_offers())
+        await entered.wait()
+        await service.stop_full_sweep()
+        assert cleaned.is_set()
+        assert service._full_sweep is None
+        await asyncio.gather(caller, return_exceptions=True)
+    asyncio.run(exercise())

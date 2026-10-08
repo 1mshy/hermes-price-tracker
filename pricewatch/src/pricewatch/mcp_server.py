@@ -21,9 +21,12 @@ log = logging.getLogger(__name__)
 _BASE_INSTRUCTIONS = (
     "Price research and tracking across major tech and 3D-printing retailers. "
     "Use compare_prices for a one-off 'what does this cost' question. Use "
-    "track_product_url or track_product_description to set up an ongoing watch "
+    "add_watch to save a product URL or name immediately as an ongoing watch "
     "that notifies the user on Discord/Signal/WhatsApp when a price target is hit or a "
-    "sold-out listing comes back in stock. "
+    "sold-out listing comes back in stock. A bare product name or link is enough: "
+    "add_watch defaults to a 5% drop alert and retries retailer lookup automatically. "
+    "Confirm the saved watch once, explain its returned rule, and never send routine "
+    "lookup-failure or still-working messages. Pending means saved, not a verified price. "
     "Prices are read from official store APIs and structured product data, so "
     "always report the store and URL alongside any figure you quote."
 )
@@ -94,6 +97,25 @@ async def compare_prices(query: str, stores: list[str] | None = None,
                          limit_per_store: int = 3, country: str | None = None) -> dict:
     return await service.compare(query, stores=stores, limit_per_store=limit_per_store,
                                  country=country)
+
+
+@mcp.tool(description=(
+    "Preferred way to add a product to the watchlist: give a product URL or name in input. "
+    "Saves immediately, researches retailers in the background, and retries automatically "
+    "even after a restart or a failed first lookup. No price rule is required: the default "
+    "is a 5% drop from the first readable price. Use target_price, drop_pct, or "
+    "alert_on_restock to override that default if the user specified a rule. Repeated "
+    "identical products reuse their watch without changing its settings. Confirm saved "
+    "and state the returned rule once; pending/retrying are not verified current prices. "
+    "Do not ask for a threshold just to save a product, or send routine failure updates."
+))
+async def add_watch(input: str, target_price: float | None = None,
+                    drop_pct: float | None = None, alert_on_restock: bool = False,
+                    stores: list[str] | None = None, channels: str = "",
+                    cooldown_hours: int = 12) -> dict:
+    return await service.add_watch(input, target_price=target_price, drop_pct=drop_pct,
+                                   alert_on_restock=alert_on_restock, stores=stores,
+                                   channels=channels, cooldown_hours=cooldown_hours)
 
 
 @mcp.tool(
@@ -177,11 +199,11 @@ async def update_tracker(tracker_id: int, target_price: float | None = None,
                          channels: str | None = None, cooldown_hours: int | None = None,
                          active: bool | None = None, label: str | None = None,
                          reset_baseline: bool = False) -> dict:
-    return await service.set_tracker(
-        tracker_id, target_price=target_price, drop_pct=drop_pct,
-        alert_on_restock=alert_on_restock, channels=channels,
-        cooldown_hours=cooldown_hours, active=active, label=label,
-        reset_baseline=reset_baseline)
+    changes = dict(target_price=target_price, drop_pct=drop_pct,
+                   alert_on_restock=alert_on_restock, channels=channels,
+                   cooldown_hours=cooldown_hours, active=active, label=label,
+                   reset_baseline=reset_baseline)
+    return await service.set_tracker(tracker_id, **{k: v for k, v in changes.items() if v is not None})
 
 
 @mcp.tool(description="Stop and delete a price watch permanently, by tracker_id.")

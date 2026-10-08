@@ -14,11 +14,13 @@ import argparse
 import asyncio
 import json
 import re
+import socket
 import sys
 import time
 from urllib.parse import urljoin, urlsplit
 
 from .fetch import fetcher
+from .settings import settings
 from .stores.catalog import CATALOG
 from .stores.registry import ADAPTERS, fetch_offer, searchable
 
@@ -40,6 +42,7 @@ PRODUCT_PATTERNS: dict[str, str] = {
     "bestbuyca": r"/product/[^\s\"']+/\d{8}",
     "canadacomputers": r"/en/[^\s\"']+/\d+/[^\s\"']+\.html",
     "memoryexpress": r"/Products/MX\d+",
+    "kb3d": r"/store/[^/]+/\d+[^\s\"']+\.html",
 }
 GENERIC_PATTERN = r"/(?:products?|item|p|dp)/[A-Za-z0-9][^\s\"'<>]{3,80}"
 
@@ -93,7 +96,7 @@ async def _from_woo(host: str) -> str | None:
 
 async def _from_homepage(host: str, key: str, allow_browser: bool) -> str | None:
     pattern = PRODUCT_PATTERNS.get(key, GENERIC_PATTERN)
-    home = f"https://{host}/"
+    home = f"https://{host}/store/" if key == "kb3d" else f"https://{host}/"
     try:
         page = await fetcher.get(home)
         if (page.looks_blocked or len(page.text) < 2000) and allow_browser:
@@ -111,7 +114,7 @@ async def _from_homepage(host: str, key: str, allow_browser: bool) -> str | None
     root = _root(page.url)
     for match in re.finditer(rf'href=["\']([^"\']*{pattern}[^"\']*)["\']', page.text):
         href = match.group(1)
-        if any(skip in href for skip in ("/cart", "/account", "javascript:", "#", "/cdn/", "/static/")):
+        if any(skip in href for skip in ("/cart", "/account", "javascript:", "#", "/cdn/", "/static/", "configurator")):
             continue
         absolute = urljoin(root, href)
         # Stay on the store's own domain — homepages link out to CDNs and marketplaces.
@@ -156,6 +159,8 @@ async def discover_product_url(entry: dict, allow_browser: bool) -> tuple[str | 
                 return hits[0].url, "adapter-search"
         except Exception:
             pass
+    walled = walled or any(fetcher.playbook.strategy(domain) == "blocked"
+                          for domain in ADAPTERS[entry["key"]].domains)
     return None, ("blocked" if walled else "not-found")
 
 
@@ -180,6 +185,21 @@ def _classify(result, url: str | None, how: str = "") -> str:
 async def verify_store(entry: dict, allow_browser: bool, timeout: float) -> dict:
     started = time.monotonic()
     url = None
+    if not ADAPTERS[entry["key"]].trackable:
+        return {"key": entry["key"], "label": entry["label"], "kind": entry["kind"],
+                "tags": entry["tags"], "status": "LIMITED", "url": None,
+                "discovery": "unsupported", "method": "unsupported",
+                "error": entry.get("note"), "seconds": 0,
+                "searchable": searchable(entry["key"])}
+    try:
+        if not settings.pw_http_proxy:
+            await asyncio.wait_for(asyncio.get_running_loop().getaddrinfo(
+                entry["domains"][0], 443, type=socket.SOCK_STREAM), timeout=min(timeout, 5))
+    except (socket.gaierror, asyncio.TimeoutError):
+        return {"key": entry["key"], "label": entry["label"], "kind": entry["kind"],
+                "tags": entry["tags"], "status": "UNREACHABLE", "url": None,
+                "discovery": "dns", "error": "storefront hostname could not be resolved",
+                "seconds": round(time.monotonic() - started, 1)}
     try:
         url, how = await asyncio.wait_for(
             discover_product_url(entry, allow_browser), timeout=timeout)
@@ -210,7 +230,7 @@ async def verify_store(entry: dict, allow_browser: bool, timeout: float) -> dict
 
 
 ICONS = {"OK": "✅", "LIMITED": "🔎", "BLOCKED": "🚫", "NEEDS-KEY": "🔑", "FAIL": "❌",
-         "TIMEOUT": "⏱", "ERROR": "💥", "NO-URL": "❓"}
+         "TIMEOUT": "⏱", "ERROR": "💥", "NO-URL": "❓", "UNREACHABLE": "🌐"}
 
 
 async def run(tags: list[str] | None, only: list[str] | None, allow_browser: bool,
@@ -256,15 +276,21 @@ def render_table(rows: list[dict]) -> str:
 
 
 async def main_async(args) -> int:
-    rows = await run(args.tag, args.store, not args.no_browser, args.concurrency, args.timeout)
+    previous_browser = settings.pw_browser_enabled
+    if args.no_browser:
+        settings.pw_browser_enabled = False
+    try:
+        rows = await run(args.tag, args.store, not args.no_browser, args.concurrency, args.timeout)
+    finally:
+        await fetcher.aclose()
+        settings.pw_browser_enabled = previous_browser
     print(render_table(rows))
     if args.json:
         with open(args.json, "w") as handle:
             json.dump(rows, handle, indent=2)
         print(f"\nwrote {args.json}")
-    await fetcher.aclose()
-    hard_failures = [r for r in rows if r["status"] in ("FAIL", "ERROR", "NO-URL")]
-    return 1 if args.strict and hard_failures else 0
+    hard_failures = [r for r in rows if r["status"] in ("FAIL", "ERROR", "NO-URL", "TIMEOUT", "UNREACHABLE")]
+    return 1 if args.strict and (hard_failures or not rows) else 0
 
 
 def main() -> int:
@@ -276,7 +302,13 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=90.0)
     parser.add_argument("--json", help="also write the raw report to this path")
     parser.add_argument("--strict", action="store_true", help="exit non-zero on hard failures")
-    return asyncio.run(main_async(parser.parse_args()))
+    args = parser.parse_args()
+    known = {entry["key"] for entry in CATALOG}
+    if args.store and set(args.store) - known:
+        parser.error("unknown store(s): " + ", ".join(sorted(set(args.store) - known)))
+    if args.timeout <= 0 or args.concurrency <= 0:
+        parser.error("timeout and concurrency must be positive")
+    return asyncio.run(main_async(args))
 
 
 if __name__ == "__main__":

@@ -50,7 +50,7 @@ def _canonical_product_url(url: str) -> str:
 #: A Markets locale segment: /en-ca, /fr-ca, /de, /en-eu.
 _LOCALE_RE = re.compile(r"^[a-z]{2}(?:-[a-z]{2})?$")
 
-#: market root → what it actually bills in ("" once asked and answered badly)
+#: market root → what it actually bills in; failed reads are never cached.
 _MARKET_CURRENCY: dict[str, str] = {}
 #: storefront domain → locale prefix that bills in the shopper's currency
 _PREFERRED_MARKET: dict[str, str] = {}
@@ -107,7 +107,8 @@ async def market_currency(market_root: str, fallback: str) -> str:
         except Exception:                    # no cart.js, or not a market at all
             found = ""
         code = found if len(found) == 3 else ""
-        _MARKET_CURRENCY[market_root] = code
+        if code:
+            _MARKET_CURRENCY[market_root] = code
     return code or fallback
 
 
@@ -127,12 +128,16 @@ async def preferred_market(domain: str, default_currency: str) -> str:
     if cached is not None:
         return cached
     prefix = ""
+    complete = True
     region = preferences.preferred_region() or region_for_currency(wanted)
     for locale in _locale_candidates(region):
-        if await market_currency(f"https://{domain}/{locale}", "") == wanted:
+        currency = await market_currency(f"https://{domain}/{locale}", "")
+        complete = complete and bool(currency)
+        if currency == wanted:
             prefix = f"/{locale}"
             break
-    _PREFERRED_MARKET[domain] = prefix
+    if prefix or complete:
+        _PREFERRED_MARKET[domain] = prefix
     return prefix
 
 
@@ -208,10 +213,30 @@ class ShopifyAdapter(StoreAdapter):
         root = _market_root(url)
         data, in_cents, error = await self._product(root, handle)
         if data is None:
-            return StoreResult(store=store, url=url, error=error)
+            # Shopify redirects renamed HTML handles, but often returns 404
+            # for their old .js/.json endpoints (observed on SUNLU). Resolve
+            # the public redirect once, on the same storefront, then retry.
+            try:
+                page = await fetcher.get(url, retries=0)
+                renamed = _HANDLE_RE.search(urlsplit(page.url).path)
+                if (page.status == 200 and not page.looks_blocked and renamed
+                        and host_of(page.url) == host_of(url)
+                        and renamed.group(1) != handle):
+                    variant_query = [(k, v) for k, v in parse_qsl(urlsplit(url).query) if k == "variant"]
+                    url = urlunsplit(urlsplit(page.url)._replace(query=urlencode(variant_query)))
+                    root = _market_root(url)
+                    data, in_cents, error = await self._product(root, renamed.group(1))
+            except Exception:
+                pass
+            if data is None:
+                return StoreResult(store=store, url=url, error=error)
 
         money = cents_to_decimal if in_cents else parse_price
         variant = _pick_variant(data, url, money) or {}
+        selected_id = next((v for k, v in parse_qsl(urlsplit(url).query) if k == "variant"), None)
+        if selected_id and str(variant.get("id")) != selected_id:
+            return StoreResult(store=store, url=url, method="shopify-json:not-found",
+                               error="selected Shopify variant is no longer present; choose an available variant")
         available = variant.get("available", data.get("available"))
         return StoreResult(
             store=store,

@@ -16,6 +16,8 @@ FROM nousresearch/hermes-agent:v2026.8.31
 # has to be baked in at build time — which is what these two COPYs are for.
 COPY skills /opt/hermes-skills
 COPY dashboard-themes /opt/hermes-dashboard-themes
+COPY cron-prompts /opt/hermes-cron-prompts
+COPY scripts /opt/hermes-shopping-scripts
 
 # s6-overlay runs /etc/cont-init.d/* as root before the dashboard service and
 # the container command start; that is where config.yaml gets rendered from the

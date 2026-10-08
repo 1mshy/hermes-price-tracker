@@ -1,0 +1,60 @@
+{
+  "startup_catchup": true,
+  "freeze_seconds": 12,
+  "catchup_seconds": 0.34,
+  "missed_ticks_coalesced": true,
+  "notification_retry": [
+    503,
+    200
+  ],
+  "restart_catchup": true,
+  "persisted_alert_deduplication": true,
+  "events": [
+    {
+      "kind": "boot",
+      "at": 1789784924.622029
+    },
+    {
+      "kind": "sweep",
+      "at": 1789784924.6943982,
+      "price": "20.00",
+      "checked": 1,
+      "failed": 0,
+      "alerts": 0,
+      "delivered": 0
+    },
+    {
+      "kind": "notification",
+      "at": 1789784937.0061145,
+      "status": 503
+    },
+    {
+      "kind": "notification",
+      "at": 1789784937.1096075,
+      "status": 200,
+      "title": "\ud83d\udcb8 Recovery test product"
+    },
+    {
+      "kind": "sweep",
+      "at": 1789784937.1145687,
+      "price": "9.00",
+      "checked": 1,
+      "failed": 0,
+      "alerts": 1,
+      "delivered": 1
+    },
+    {
+      "kind": "boot",
+      "at": 1789784938.54588
+    },
+    {
+      "kind": "sweep",
+      "at": 1789784938.6030855,
+      "price": "9.00",
+      "checked": 1,
+      "failed": 0,
+      "alerts": 0,
+      "delivered": 1
+    }
+  ]
+}

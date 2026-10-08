@@ -67,6 +67,25 @@ if [ -d /opt/hermes-skills ]; then
   cp -r /opt/hermes-skills/. "$HERMES_DIR/skills/" 2>/dev/null || true
 fi
 
+# The engine-health watchdog is repo-owned: the template in the fallback skill
+# is the source of truth and the no_agent cron job runs the copy in
+# $HERMES_HOME/scripts, so refresh that one file on every boot. Scripts the
+# agent wrote beside it are left alone.
+WATCHDOG=/opt/hermes-skills/price-tracking/price-watch-fallback/templates/pricewatch_health_watchdog.py
+if [ -f "$WATCHDOG" ]; then
+  mkdir -p "$HERMES_DIR/scripts"
+  cp "$WATCHDOG" "$HERMES_DIR/scripts/pricewatch_health_watchdog.py" 2>/dev/null || \
+    echo "[hermes-shopping] warning: could not refresh scripts/pricewatch_health_watchdog.py" >&2
+fi
+
+# Apply quiet delivery and current templates to the existing shopping jobs.
+# Use Hermes' own file lock/update API and preserve schedules, custom prompts,
+# disabled jobs, and every unrelated job. This runs before the cron ticker.
+if [ -f /opt/hermes-shopping-scripts/reconcile_shopping_jobs.py ]; then
+  python /opt/hermes-shopping-scripts/reconcile_shopping_jobs.py || \
+    echo "[hermes-shopping] warning: could not reconcile shopping cron delivery" >&2
+fi
+
 # Ship dashboard themes where the web server scans for user themes. The switcher
 # lists every *.yaml here alongside the built-ins; dashboard.theme above picks one.
 if [ -d /opt/hermes-dashboard-themes ]; then

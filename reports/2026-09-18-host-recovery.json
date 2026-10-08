@@ -1,0 +1,44 @@
+{
+  "seconds_to_recover": 34.2,
+  "states": {
+    "hermes": [
+      "running",
+      "healthy"
+    ],
+    "pricewatch": [
+      "running",
+      "healthy"
+    ],
+    "signal-cli": [
+      "running",
+      "healthy"
+    ]
+  },
+  "health": {
+    "status": "ok",
+    "channels": {
+      "discord": false,
+      "ntfy": true,
+      "signal": false,
+      "whatsapp": false,
+      "whatsapp_callmebot": false
+    },
+    "sweep": {
+      "cron": "*/30 * * * *",
+      "source": "env",
+      "default_cron": "*/30 * * * *",
+      "next_sweep_at": "2026-09-19T03:00:00+00:00",
+      "last_sweep_at": "2026-09-19T02:30:28.004757+00:00",
+      "last_sweep": {
+        "checked": 7,
+        "updated": 7,
+        "failed": 0,
+        "alerts": 0
+      },
+      "last_skipped_at": null,
+      "recovery_sweep_at": null,
+      "sweep_running": false
+    }
+  },
+  "recovered_by": "installed launchd calendar helper; no manual start"
+}

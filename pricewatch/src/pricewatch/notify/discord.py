@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from ..fetch import fetcher
 from ..settings import settings
-from .base import Alert, Channel
+from .base import Alert, Channel, check_response
 
 _GREEN = 0x2ECC71
 
@@ -43,5 +43,4 @@ class DiscordChannel(Channel):
             settings.discord_webhook_url,
             json={"username": "Hermes Shopping", "embeds": [embed]},
         )
-        if response.status_code >= 300:
-            raise RuntimeError(f"discord webhook {response.status_code}: {response.text[:200]}")
+        check_response(response, "discord webhook")

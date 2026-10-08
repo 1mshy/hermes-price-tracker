@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f3ed">
+  <title>Your watchlist · Hermes Shopping</title>
+  <link rel="stylesheet" href="/assets/watchlist.css">
+  <script src="/assets/watchlist.js" defer></script>
+</head>
+<body>
+  <header class="masthead"><a class="brand" href="/watchlist">H<span>HERMES / SHOPPING</span></a><span class="quiet-label">A little patience. A better price.</span></header>
+  <main>
+    <section class="intro"><div><p class="eyebrow">YOUR PERSONAL LOOKOUT</p><h1>Worth the wait.</h1><p class="lede">Save what you want. Hermes keeps checking and lets you know when your price rule is met.</p></div><div class="engine"><span class="status-dot"></span><span id="engine-status">Connecting to your watchlist…</span></div></section>
+    <section class="add-section" aria-labelledby="add-title">
+      <div class="add-heading"><h2 id="add-title">What are you looking for?</h2><p>Paste a product link or type its name. Add several, one per line.</p></div>
+      <form id="add-form">
+        <label class="sr-only" for="product-input">Product links or names</label>
+        <textarea id="product-input" name="input" rows="2" required maxlength="12000" placeholder="https://store.example.com/products/…&#10;or Polymaker PLA Pro 1kg black"></textarea>
+        <div class="add-actions"><details id="price-options"><summary>Set a target price or restock alert</summary><div class="options-grid"><label>Target price <span id="currency-hint"></span><input id="target-price" type="number" min="0.01" step="0.01" placeholder="Optional"></label><label>Price drop (%)<input id="drop-pct" type="number" min="0.1" max="99" step="0.1" placeholder="5% by default"></label><label class="check-label"><input id="restock" type="checkbox">Also watch for restocks</label></div><p class="small">Targets use the listing’s currency for links, and your preferred currency for product names. Options apply to every line.</p></details><button id="add-button" type="submit">Add to watchlist <span aria-hidden="true">↗</span></button></div>
+        <p class="form-help">No target needed: we’ll watch for a 5% drop. Saved items keep retrying if a store is temporarily unavailable.</p>
+        <div id="add-result" role="status" aria-live="polite"></div>
+      </form>
+    </section>
+    <section class="watches" aria-labelledby="watchlist-title"><div class="list-heading"><h2 id="watchlist-title">Your watchlist <span id="watch-count"></span></h2><button class="text-button" id="refresh-view" type="button">Refresh view <span aria-hidden="true">↻</span></button></div>
+      <div class="filters" role="group" aria-label="Filter watchlist"><button type="button" class="filter selected" data-filter="all" aria-pressed="true">All items</button><button type="button" class="filter" data-filter="active" aria-pressed="false">Watching</button><button type="button" class="filter" data-filter="paused" aria-pressed="false">Paused</button></div>
+      <p id="list-error" role="alert" hidden></p><div id="watch-list" aria-live="polite"><p class="empty">Loading your saved items…</p></div>
+    </section>
+    <footer><span>Quiet by default. Useful when it matters.</span><span id="delivery-status">Checking alert delivery…</span></footer>
+  </main>
+</body>
+</html>
